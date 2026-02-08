@@ -366,22 +366,30 @@ export class Visual implements IVisual {
                 const chart = createChart(chartType, this.chartContainer, this.parsedData, chartSettings, dimensions);
                 chart.render();
 
-                // Check for cross-highlighting
+                // Add interactivity after rendering (assigns data-index attributes)
+                this.addInteractivity(chartType, comparisonType);
+
+                // Check for cross-highlighting from other visuals (must run after addInteractivity tags elements)
                 const hasHighlights = this.dataView?.categorical?.values?.some(v => v.highlights != null) || false;
                 if (hasHighlights && this.dataView?.categorical?.values) {
                     const highlights = this.dataView.categorical.values[0]?.highlights;
                     if (highlights) {
-                        this.chartContainer.selectAll("rect, circle").each(function(d, i) {
+                        const dpCount = this.parsedData?.dataPoints.length || 1;
+                        this.chartContainer.selectAll("rect[data-index], circle[data-index]").each(function() {
+                            d3.select(this).style("opacity", "0.3");
+                        });
+                        this.chartContainer.selectAll("rect[data-index], circle[data-index]").each(function() {
                             const el = d3.select(this);
-                            if (i < highlights.length && highlights[i] == null) {
-                                el.style("opacity", "0.3");
+                            const indexStr = el.attr("data-index");
+                            if (indexStr != null) {
+                                const dpIndex = parseInt(indexStr) % dpCount;
+                                if (dpIndex < highlights.length && highlights[dpIndex] != null) {
+                                    el.style("opacity", "1");
+                                }
                             }
                         });
                     }
                 }
-
-                // Add interactivity after rendering
-                this.addInteractivity(chartType, comparisonType);
 
                 // Show drill-up button if drilled down
                 if (this.formattingSettings.interactionCard.enableDrilldown.value) {
@@ -411,13 +419,32 @@ export class Visual implements IVisual {
     private createSelectionIds(): void {
         if (!this.dataView?.categorical?.categories?.[0]) return;
 
-        const category = this.dataView.categorical.categories[0];
+        const allCategories = this.dataView.categorical.categories;
         this.selectionIds = [];
 
-        for (let i = 0; i < category.values.length; i++) {
-            const selectionId = this.host.createSelectionIdBuilder()
-                .withCategory(category, i)
-                .createSelectionId();
+        // Find category and group columns by role
+        let categoryCol: powerbi.DataViewCategoryColumn | null = null;
+        let groupCol: powerbi.DataViewCategoryColumn | null = null;
+
+        for (const cat of allCategories) {
+            const role = cat.source.roles;
+            if (role) {
+                if (role["category"]) categoryCol = cat;
+                if (role["group"]) groupCol = cat;
+            }
+        }
+        // Fallback to first category if no role match
+        if (!categoryCol && allCategories.length > 0) categoryCol = allCategories[0];
+        if (!categoryCol) return;
+
+        for (let i = 0; i < categoryCol.values.length; i++) {
+            let builder = this.host.createSelectionIdBuilder()
+                .withCategory(categoryCol, i);
+            // Include group identity for small multiples selection
+            if (groupCol) {
+                builder = builder.withCategory(groupCol, i);
+            }
+            const selectionId = builder.createSelectionId();
             this.selectionIds.push(selectionId);
         }
     }
@@ -563,23 +590,42 @@ export class Visual implements IVisual {
         // If we have selections, make matching elements opaque
         if (hasSelection) {
             const dataPointCount = this.parsedData?.dataPoints.length || 1;
-            // Build set of selected data point indices
             const selectedDpIndices = new Set<number>();
+
+            // Build key set from incoming selection IDs for fast lookup
+            const selectedKeys = new Set<string>();
             for (const sid of selectionIds) {
-                for (let i = 0; i < this.selectionIds.length; i++) {
-                    // Compare by reference since Power BI returns the same IDs
-                    if (this.selectionIds[i] === sid) {
-                        selectedDpIndices.add(i);
+                try {
+                    const key = (sid as any).getKey?.();
+                    if (key) selectedKeys.add(key);
+                } catch { /* ignore */ }
+            }
+
+            for (let i = 0; i < this.selectionIds.length; i++) {
+                const myId = this.selectionIds[i];
+                // Try .equals() first (most reliable across update cycles)
+                let matched = false;
+                for (const sid of selectionIds) {
+                    try {
+                        if ((myId as any).equals?.(sid)) { matched = true; break; }
+                    } catch { /* ignore */ }
+                }
+                // Fallback to key comparison
+                if (!matched && selectedKeys.size > 0) {
+                    try {
+                        const myKey = (myId as any).getKey?.();
+                        if (myKey && selectedKeys.has(myKey)) matched = true;
+                    } catch { /* ignore */ }
+                }
+                // Last resort: reference equality
+                if (!matched) {
+                    for (const sid of selectionIds) {
+                        if (myId === sid) { matched = true; break; }
                     }
                 }
+                if (matched) selectedDpIndices.add(i);
             }
-            // If reference comparison didn't work, use index-based approach
-            if (selectedDpIndices.size === 0 && selectionIds.length > 0) {
-                // Fallback: assume first N data points are selected
-                for (let i = 0; i < Math.min(selectionIds.length, dataPointCount); i++) {
-                    selectedDpIndices.add(i);
-                }
-            }
+
             this.chartContainer.selectAll("rect[data-index], circle[data-index]").each(function() {
                 const el = d3.select(this);
                 const indexStr = el.attr("data-index");
@@ -587,10 +633,50 @@ export class Visual implements IVisual {
                     const dpIndex = parseInt(indexStr) % dataPointCount;
                     if (selectedDpIndices.has(dpIndex)) {
                         el.style("opacity", "1");
+                        // Add selection indicator stroke for rect elements
+                        if ((el.node() as Element)?.tagName === "rect") {
+                            el.attr("stroke", "#333").attr("stroke-width", "1.5");
+                        }
                     }
                 }
             });
+
+            // Show clear-selection button
+            this.renderClearSelectionButton();
+        } else {
+            // Remove selection strokes and clear button
+            this.chartContainer.selectAll("rect[data-index]")
+                .attr("stroke", null).attr("stroke-width", null);
+            this.svg.selectAll(".clear-selection-btn").remove();
         }
+    }
+
+    private renderClearSelectionButton(): void {
+        this.svg.selectAll(".clear-selection-btn").remove();
+        const self = this;
+        const btn = this.svg.append("g")
+            .attr("class", "clear-selection-btn")
+            .attr("transform", "translate(8, 8)")
+            .style("cursor", "pointer")
+            .on("click", function(event: MouseEvent) {
+                event.stopPropagation();
+                self.selectionManager.clear().then(() => {
+                    self.syncSelectionState([]);
+                });
+                self.highlightComment(-1);
+                const crossFilterMode = String(self.formattingSettings.interactionCard.crossFilterMode.value.value);
+                if (crossFilterMode === "filter") {
+                    self.clearCrossFilter();
+                }
+            });
+        btn.append("rect")
+            .attr("width", 20).attr("height", 20).attr("rx", 3)
+            .attr("fill", "#f5f5f5").attr("stroke", "#ccc");
+        btn.append("text")
+            .attr("x", 10).attr("y", 14)
+            .attr("text-anchor", "middle")
+            .attr("font-size", "13px").attr("fill", "#666")
+            .text("×");
     }
 
     /**
@@ -637,8 +723,23 @@ export class Visual implements IVisual {
         this.crossFilterValues.add(dp.category);
 
         const queryName = category.source.queryName || "";
-        const tableName = queryName.includes(".") ? queryName.substring(0, queryName.indexOf(".")) : queryName;
-        const columnName = category.source.displayName || "";
+        // queryName format: "Table.Column" or sometimes just "Column"
+        let tableName: string;
+        let columnName: string;
+        const dotIndex = queryName.indexOf(".");
+        if (dotIndex > 0) {
+            tableName = queryName.substring(0, dotIndex);
+            columnName = queryName.substring(dotIndex + 1);
+        } else {
+            // Fallback: use queryName as table and displayName as column
+            tableName = queryName || category.source.displayName || "";
+            columnName = category.source.displayName || "";
+        }
+
+        if (!tableName || !columnName) {
+            console.warn("[Atlyn] Cross-filter: could not determine table/column from queryName:", queryName);
+            return;
+        }
 
         try {
             const filter = new BasicFilter(
@@ -648,7 +749,6 @@ export class Visual implements IVisual {
             );
             (this.host as any).applyJsonFilter(filter, "general", "filter", 1 /* FilterAction.merge */);
         } catch (e) {
-            // Filter API may not be available in all environments
             console.warn("[Atlyn] Cross-filter failed:", e);
         }
     }

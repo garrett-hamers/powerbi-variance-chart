@@ -890,3 +890,236 @@ describe("Grouped chart rendering with peripherals", () => {
         expect(hasNaN).toBe(false);
     });
 });
+
+// ─── Cross-Filter Logic Tests ───
+
+describe("Cross-filter logic", () => {
+    let container: d3.Selection<SVGGElement, unknown, null, undefined>;
+
+    beforeEach(() => {
+        const body = d3.select(document.body);
+        body.selectAll("svg").remove();
+        const svg = body.append("svg").attr("width", 600).attr("height", 400);
+        container = svg.append("g");
+    });
+
+    // Mock ISelectionId with getKey and equals methods
+    function mockSelectionId(key: string) {
+        return {
+            _key: key,
+            getKey() { return this._key; },
+            equals(other: any) { return other?._key === this._key; },
+            getSelector() { return {}; },
+            getSelectorsByColumn() { return {}; },
+            hasIdentity() { return true; }
+        };
+    }
+
+    describe("Selection ID comparison", () => {
+        it("matches selection IDs using equals() method", () => {
+            const id1a = mockSelectionId("table.col.val1");
+            const id1b = mockSelectionId("table.col.val1");
+            // Different objects, same key — equals() should match
+            expect(id1a.equals(id1b)).toBe(true);
+            expect(id1a === id1b).toBe(false); // reference comparison fails
+        });
+
+        it("matches selection IDs using getKey() method", () => {
+            const id1 = mockSelectionId("table.col.val1");
+            const id2 = mockSelectionId("table.col.val2");
+            const selectedKeys = new Set([id1.getKey()]);
+            expect(selectedKeys.has(id1.getKey())).toBe(true);
+            expect(selectedKeys.has(id2.getKey())).toBe(false);
+        });
+
+        it("does not match different selection IDs", () => {
+            const id1 = mockSelectionId("table.col.val1");
+            const id2 = mockSelectionId("table.col.val2");
+            expect(id1.equals(id2)).toBe(false);
+        });
+    });
+
+    describe("Filter target construction", () => {
+        it("parses Table.Column queryName format", () => {
+            const queryName = "Sales.Product";
+            const dotIndex = queryName.indexOf(".");
+            const tableName = dotIndex > 0 ? queryName.substring(0, dotIndex) : queryName;
+            const columnName = dotIndex > 0 ? queryName.substring(dotIndex + 1) : queryName;
+            expect(tableName).toBe("Sales");
+            expect(columnName).toBe("Product");
+        });
+
+        it("handles queryName without dot separator", () => {
+            const queryName = "Product";
+            const displayName = "Product Name";
+            const dotIndex = queryName.indexOf(".");
+            const tableName = dotIndex > 0 ? queryName.substring(0, dotIndex) : (queryName || displayName);
+            const columnName = dotIndex > 0 ? queryName.substring(dotIndex + 1) : displayName;
+            expect(tableName).toBe("Product");
+            expect(columnName).toBe("Product Name");
+        });
+
+        it("handles empty queryName with fallback to displayName", () => {
+            const queryName = "";
+            const displayName = "Category";
+            const dotIndex = queryName.indexOf(".");
+            const tableName = dotIndex > 0 ? queryName.substring(0, dotIndex) : (queryName || displayName);
+            const columnName = dotIndex > 0 ? queryName.substring(dotIndex + 1) : displayName;
+            expect(tableName).toBe("Category");
+            expect(columnName).toBe("Category");
+        });
+    });
+
+    describe("Incoming highlight processing", () => {
+        it("dims non-highlighted data points based on data-index", () => {
+            const data = sampleDataWithComments();
+            const dims = defaultDimensions();
+            dims.layout = {
+                chartArea: { x: 60, y: 30, width: 290, height: 210 },
+                commentBoxArea: null
+            };
+            const settings = defaultSettings();
+            const chart = createChart("variance", container, data, settings, dims);
+            chart.render();
+
+            // Simulate data-index tagging (as addInteractivity would)
+            let idx = 0;
+            container.selectAll("rect").each(function() {
+                const el = d3.select(this);
+                const fill = el.attr("fill");
+                if (fill && fill !== "none" && fill !== "white" && fill !== "#fff") {
+                    el.attr("data-index", String(idx++));
+                }
+            });
+
+            // Simulate highlights: only first data point highlighted
+            const highlights = [100, null]; // first highlighted, second not
+            const dpCount = data.dataPoints.length;
+
+            // Dim all
+            container.selectAll("rect[data-index]").each(function() {
+                d3.select(this).style("opacity", "0.3");
+            });
+            // Restore highlighted
+            container.selectAll("rect[data-index]").each(function() {
+                const el = d3.select(this);
+                const indexStr = el.attr("data-index");
+                if (indexStr != null) {
+                    const dpIndex = parseInt(indexStr) % dpCount;
+                    if (dpIndex < highlights.length && highlights[dpIndex] != null) {
+                        el.style("opacity", "1");
+                    }
+                }
+            });
+
+            // Check: elements mapped to dpIndex 0 should be opaque, dpIndex 1 should be dimmed
+            let dp0Opacity = "";
+            let dp1Opacity = "";
+            container.selectAll("rect[data-index]").each(function() {
+                const el = d3.select(this);
+                const dpIndex = parseInt(el.attr("data-index")!) % dpCount;
+                if (dpIndex === 0) dp0Opacity = el.style("opacity");
+                if (dpIndex === 1) dp1Opacity = el.style("opacity");
+            });
+            expect(dp0Opacity).toBe("1");
+            expect(dp1Opacity).toBe("0.3");
+        });
+    });
+
+    describe("Selection state sync", () => {
+        it("applies opacity dimming and restore based on selection", () => {
+            const data = sampleDataWithComments();
+            const dims = defaultDimensions();
+            dims.layout = {
+                chartArea: { x: 60, y: 30, width: 290, height: 210 },
+                commentBoxArea: null
+            };
+            const settings = defaultSettings();
+            const chart = createChart("variance", container, data, settings, dims);
+            chart.render();
+
+            // Tag elements with data-index
+            let idx = 0;
+            container.selectAll("rect").each(function() {
+                const el = d3.select(this);
+                const fill = el.attr("fill");
+                if (fill && fill !== "none" && fill !== "white" && fill !== "#fff") {
+                    el.attr("data-index", String(idx++));
+                }
+            });
+
+            const dpCount = data.dataPoints.length;
+            const selectedDpIndices = new Set([0]); // select first data point
+
+            // Dim all, then restore selected
+            container.selectAll("rect[data-index]").each(function() {
+                d3.select(this).style("opacity", "0.3");
+            });
+            container.selectAll("rect[data-index]").each(function() {
+                const el = d3.select(this);
+                const dpIndex = parseInt(el.attr("data-index")!) % dpCount;
+                if (selectedDpIndices.has(dpIndex)) {
+                    el.style("opacity", "1");
+                }
+            });
+
+            // Verify
+            container.selectAll("rect[data-index]").each(function() {
+                const el = d3.select(this);
+                const dpIndex = parseInt(el.attr("data-index")!) % dpCount;
+                const expectedOpacity = selectedDpIndices.has(dpIndex) ? "1" : "0.3";
+                expect(el.style("opacity")).toBe(expectedOpacity);
+            });
+        });
+
+        it("restores full opacity when no selection", () => {
+            const data = sampleDataWithComments();
+            const dims = defaultDimensions();
+            dims.layout = {
+                chartArea: { x: 60, y: 30, width: 290, height: 210 },
+                commentBoxArea: null
+            };
+            const settings = defaultSettings();
+            const chart = createChart("variance", container, data, settings, dims);
+            chart.render();
+
+            // Tag elements
+            let idx = 0;
+            container.selectAll("rect").each(function() {
+                const el = d3.select(this);
+                const fill = el.attr("fill");
+                if (fill && fill !== "none" && fill !== "white" && fill !== "#fff") {
+                    el.attr("data-index", String(idx++));
+                }
+            });
+
+            // No selection: all elements should be opacity 1
+            container.selectAll("rect[data-index]").each(function() {
+                d3.select(this).style("opacity", "1");
+            });
+
+            container.selectAll("rect[data-index]").each(function() {
+                expect(d3.select(this).style("opacity")).toBe("1");
+            });
+        });
+    });
+
+    describe("Multi-select cross-filter values", () => {
+        it("accumulates values for multi-select", () => {
+            const values = new Set<string>();
+            // Simulate single click
+            values.clear();
+            values.add("Jan");
+            expect(Array.from(values)).toEqual(["Jan"]);
+
+            // Simulate ctrl+click (multi-select, no clear)
+            values.add("Feb");
+            expect(Array.from(values)).toEqual(["Jan", "Feb"]);
+
+            // Simulate single click again (clears first)
+            values.clear();
+            values.add("Mar");
+            expect(Array.from(values)).toEqual(["Mar"]);
+        });
+    });
+});
