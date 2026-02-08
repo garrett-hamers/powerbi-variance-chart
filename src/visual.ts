@@ -500,10 +500,8 @@ export class Visual implements IVisual {
                                 self.syncSelectionState(ids);
                             });
 
-                        // Cross-filter mode: apply a BasicFilter to filter other visuals
-                        if (crossFilterMode === "filter") {
-                            self.applyCrossFilter(dpIndex, isMultiSelect);
-                        }
+                        // Always apply cross-filter so other visuals (including slicers) respond
+                        self.applyCrossFilter(dpIndex, isMultiSelect);
                     }
                     // Highlight the matching comment card and marker
                     self.highlightComment(dpIndex);
@@ -517,10 +515,7 @@ export class Visual implements IVisual {
                         self.syncSelectionState([]);
                     });
                     self.highlightComment(-1);
-                    // Clear cross-filter
-                    if (crossFilterMode === "filter") {
-                        self.clearCrossFilter();
-                    }
+                    self.clearCrossFilter();
                 }
             });
         }
