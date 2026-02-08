@@ -1,0 +1,115 @@
+.varianceChart {
+    font-family: "Segoe UI", wf_segoe-ui_normal, helvetica, arial, sans-serif;
+
+    .chartContainer {
+        .x-axis, .y-axis {
+            path, line {
+                stroke: #ccc;
+            }
+            text {
+                fill: #666;
+            }
+        }
+
+        rect {
+            transition: opacity 0.2s ease, transform 0.1s ease;
+            cursor: pointer;
+            
+            &:hover {
+                opacity: 0.85;
+                transform: translateY(-1px);
+            }
+            
+            &:focus {
+                outline: 2px solid #0078d4;
+                outline-offset: 2px;
+            }
+        }
+
+        circle {
+            transition: opacity 0.2s ease, r 0.1s ease;
+            cursor: pointer;
+            
+            &:hover {
+                opacity: 0.85;
+            }
+            
+            &:focus {
+                outline: 2px solid #0078d4;
+                outline-offset: 2px;
+            }
+        }
+
+        line {
+            pointer-events: none;
+        }
+    }
+
+    .legend {
+        text {
+            font-size: 10px;
+            cursor: default;
+        }
+        
+        rect {
+            cursor: default;
+            
+            &:hover {
+                transform: none;
+            }
+        }
+    }
+
+    // Comment box scrollbar styling
+    .comment-box {
+        div {
+            scrollbar-width: thin;
+            scrollbar-color: #c0c0c0 transparent;
+
+            &::-webkit-scrollbar {
+                width: 6px;
+            }
+            &::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            &::-webkit-scrollbar-thumb {
+                background-color: #c0c0c0;
+                border-radius: 3px;
+                &:hover {
+                    background-color: #a0a0a0;
+                }
+            }
+        }
+    }
+
+    // Landing page styles
+    &.landing {
+        rect:first-child {
+            cursor: default;
+            &:hover {
+                opacity: 1;
+                transform: none;
+            }
+        }
+    }
+}
+
+// High contrast mode overrides
+@media screen and (-ms-high-contrast: active) {
+    .varianceChart {
+        rect, circle {
+            stroke: currentColor;
+            stroke-width: 1px;
+        }
+        
+        text {
+            fill: currentColor;
+        }
+        
+        .x-axis, .y-axis {
+            path, line {
+                stroke: currentColor;
+            }
+        }
+    }
+}
