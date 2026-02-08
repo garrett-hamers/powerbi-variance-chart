@@ -144,6 +144,7 @@ export class WaterfallChart extends BaseChart {
             }
 
             this.container.append("rect")
+                .attr("data-dp-index", String(i))
                 .attr("x", xPos)
                 .attr("y", y)
                 .attr("width", barWidth)

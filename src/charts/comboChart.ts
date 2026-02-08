@@ -55,11 +55,12 @@ export class ComboChart extends BaseChart {
         const fontSize = this.settings.dataLabels?.fontSize ?? this.settings.fontSize;
 
         // Draw columns for actual values
-        dataPoints.forEach(d => {
+        dataPoints.forEach((d, di) => {
             const xPos = xScale(d.category) || 0;
             const value = d.actual;
             if (value > 0) {
                 this.container.append("rect")
+                    .attr("data-dp-index", String(di))
                     .attr("x", xPos)
                     .attr("y", yScale(value))
                     .attr("width", xScale.bandwidth())
@@ -81,7 +82,7 @@ export class ComboChart extends BaseChart {
         // Draw lines for comparison series
         lineSeries.forEach(s => {
             const lineData = dataPoints
-                .map(d => ({ x: d.category, y: d[s.key] as number || 0 }))
+                .map((d, di) => ({ x: d.category, y: d[s.key] as number || 0, dpIndex: di }))
                 .filter(d => d.y > 0);
 
             if (lineData.length > 0) {
@@ -100,6 +101,7 @@ export class ComboChart extends BaseChart {
                 // Data points on line
                 lineData.forEach(d => {
                     this.container.append("circle")
+                        .attr("data-dp-index", String(d.dpIndex))
                         .attr("cx", (xScale(d.x) || 0) + xScale.bandwidth() / 2)
                         .attr("cy", yScale(d.y))
                         .attr("r", 4)

@@ -66,7 +66,7 @@ export class DotChart extends BaseChart {
         }
 
         // Draw dots for each data point
-        dataPoints.forEach(d => {
+        dataPoints.forEach((d, di) => {
             const cx = (xScale(d.category) || 0) + xScale.bandwidth() / 2;
             const comparison = this.getComparisonForPoint(d);
             const variance = this.getVarianceForPoint(d);
@@ -75,6 +75,7 @@ export class DotChart extends BaseChart {
             // Comparison dot (hollow)
             if (comparison > 0) {
                 this.container.append("circle")
+                    .attr("data-dp-index", String(di))
                     .attr("cx", cx)
                     .attr("cy", yScale(comparison))
                     .attr("r", 5)
@@ -88,6 +89,7 @@ export class DotChart extends BaseChart {
             const dotRadius = Math.min(12, Math.max(5, 5 + absVariancePct / 10));
 
             this.container.append("circle")
+                .attr("data-dp-index", String(di))
                 .attr("cx", cx)
                 .attr("cy", yScale(d.actual))
                 .attr("r", dotRadius)

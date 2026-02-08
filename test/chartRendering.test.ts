@@ -155,6 +155,26 @@ describe("Variance chart specifics", () => {
         expect(rects).toBeGreaterThan(0);
     });
 
+    it("stamps data-dp-index on all data rects mapping to correct data point", () => {
+        const data = sampleData(); // 4 data points
+        const chart = createChart("variance", container, data, defaultSettings(), defaultDimensions());
+        chart.render();
+        // Variance chart renders 3 rects per data point (comparison, actual, variance)
+        const indexed = container.selectAll("rect[data-dp-index]");
+        expect(indexed.size()).toBe(data.dataPoints.length * 3);
+        // All 3 rects for the same data point should share the same data-dp-index
+        const indicesByDp = new Map<string, number>();
+        indexed.each(function() {
+            const idx = d3.select(this).attr("data-dp-index")!;
+            indicesByDp.set(idx, (indicesByDp.get(idx) || 0) + 1);
+        });
+        // Each data point index should appear exactly 3 times
+        for (const [idx, count] of indicesByDp) {
+            expect(count).toBe(3);
+            expect(parseInt(idx)).toBeLessThan(data.dataPoints.length);
+        }
+    });
+
     it("renders text elements for data labels when enabled", () => {
         const settings = defaultSettings({ dataLabels: { ...defaultSettings().dataLabels, show: true, showValues: true } });
         const chart = createChart("variance", container, sampleData(), settings, defaultDimensions());

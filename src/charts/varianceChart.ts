@@ -63,6 +63,7 @@ export class VarianceChart extends BaseChart {
 
             // Comparison bar (IBCS style varies by comparison type)
             const compBar = this.container.append("rect")
+                .attr("data-dp-index", String(i))
                 .attr("x", xPos)
                 .attr("y", yScale(comparison))
                 .attr("width", barWidth)
@@ -87,6 +88,7 @@ export class VarianceChart extends BaseChart {
 
             // Actual bar (solid - IBCS style)
             this.container.append("rect")
+                .attr("data-dp-index", String(i))
                 .attr("x", xPos + barWidth + 2)
                 .attr("y", yScale(d.actual))
                 .attr("width", barWidth)
@@ -99,6 +101,7 @@ export class VarianceChart extends BaseChart {
             const varianceHeight = Math.abs(yScale(0) - yScale(absVariance));
 
             this.container.append("rect")
+                .attr("data-dp-index", String(i))
                 .attr("x", xPos + (barWidth + 2) * 2)
                 .attr("y", yScale(absVariance))
                 .attr("width", barWidth)

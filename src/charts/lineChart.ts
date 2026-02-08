@@ -67,7 +67,7 @@ export class LineChart extends BaseChart {
         // Render lines
         series.forEach(s => {
             const lineData = dataPoints
-                .map(d => ({ x: d.category, y: d[s.key] as number || 0 }))
+                .map((d, di) => ({ x: d.category, y: d[s.key] as number || 0, dpIndex: di }))
                 .filter(d => d.y > 0);
 
             if (lineData.length > 0) {
@@ -87,6 +87,7 @@ export class LineChart extends BaseChart {
                 const yValues = lineData.map(d => d.y);
                 lineData.forEach((d, di) => {
                     this.container.append("circle")
+                        .attr("data-dp-index", String(d.dpIndex))
                         .attr("cx", (xScale(d.x) || 0) + xScale.bandwidth() / 2)
                         .attr("cy", yScale(d.y))
                         .attr("r", 4)

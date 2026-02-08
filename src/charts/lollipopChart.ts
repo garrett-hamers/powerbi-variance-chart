@@ -98,6 +98,7 @@ export class LollipopChart extends BaseChart {
 
             // Dot
             this.container.append("circle")
+                .attr("data-dp-index", String(i))
                 .attr("cx", xEnd)
                 .attr("cy", yPos)
                 .attr("r", 6)

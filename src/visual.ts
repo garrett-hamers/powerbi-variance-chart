@@ -382,7 +382,7 @@ export class Visual implements IVisual {
                             const el = d3.select(this);
                             const indexStr = el.attr("data-index");
                             if (indexStr != null) {
-                                const dpIndex = parseInt(indexStr) % dpCount;
+                                const dpIndex = parseInt(indexStr);
                                 if (dpIndex < highlights.length && highlights[dpIndex] != null) {
                                     el.style("opacity", "1");
                                 }
@@ -454,29 +454,33 @@ export class Visual implements IVisual {
         const self = this;
         const dataPointCount = this.parsedData?.dataPoints.length || 1;
 
-        // Tag ALL visual elements (rect and circle) with data-index
-        // For charts with multiple rects per data point (e.g., variance has 3 bars per category),
-        // we use modulo to map back to the data point index
-        let elementIndex = 0;
+        // Use data-dp-index set by chart renderers for accurate data point mapping.
+        // For elements without data-dp-index, fall back to sequential data-index tagging.
+        let fallbackIndex = 0;
         this.chartContainer.selectAll("rect").each(function() {
             const el = d3.select(this);
-            // Skip axis/background rects (those without fill or white fill)
             const fill = el.attr("fill");
             if (fill && fill !== "none" && fill !== "white" && fill !== "#fff") {
-                el.attr("data-index", String(elementIndex));
+                // Prefer data-dp-index from chart renderer, copy to data-index for uniform access
+                const dpIndex = el.attr("data-dp-index");
+                if (dpIndex != null) {
+                    el.attr("data-index", dpIndex);
+                } else {
+                    el.attr("data-index", String(fallbackIndex % dataPointCount));
+                    fallbackIndex++;
+                }
                 el.style("cursor", interactionSettings.enableSelection.value ? "pointer" : "default");
-                elementIndex++;
             }
         });
 
-        let circleElementIndex = 0;
         this.chartContainer.selectAll("circle").each(function() {
             const el = d3.select(this);
-            // Skip comment marker circles — they have their own interaction
             if (el.classed("comment-marker") || el.classed("comment-card-marker")) return;
-            el.attr("data-index", String(circleElementIndex))
-              .style("cursor", interactionSettings.enableSelection.value ? "pointer" : "default");
-            circleElementIndex++;
+            const dpIndex = el.attr("data-dp-index");
+            if (dpIndex != null) {
+                el.attr("data-index", dpIndex);
+            }
+            el.style("cursor", interactionSettings.enableSelection.value ? "pointer" : "default");
         });
 
         // Selection click handlers
@@ -488,7 +492,7 @@ export class Visual implements IVisual {
                     event.stopPropagation();
                     const indexStr = d3.select(this).attr("data-index");
                     if (indexStr == null) return;
-                    const dpIndex = parseInt(indexStr) % dataPointCount;
+                    const dpIndex = parseInt(indexStr);
                     if (dpIndex >= 0 && dpIndex < self.selectionIds.length) {
                         const isMultiSelect = event.ctrlKey || event.metaKey;
                         self.selectionManager.select(self.selectionIds[dpIndex], isMultiSelect)
@@ -527,7 +531,7 @@ export class Visual implements IVisual {
                 .on("mouseover", function(event: MouseEvent) {
                     const indexStr = d3.select(this).attr("data-index");
                     if (indexStr == null) return;
-                    const dpIndex = parseInt(indexStr) % dataPointCount;
+                    const dpIndex = parseInt(indexStr);
                     const dp = self.parsedData?.dataPoints[dpIndex];
                     if (!dp) return;
 
@@ -542,7 +546,7 @@ export class Visual implements IVisual {
                 .on("mousemove", function(event: MouseEvent) {
                     const indexStr = d3.select(this).attr("data-index");
                     if (indexStr == null) return;
-                    const dpIndex = parseInt(indexStr) % dataPointCount;
+                    const dpIndex = parseInt(indexStr);
                     const dp = self.parsedData?.dataPoints[dpIndex];
                     if (!dp) return;
 
@@ -569,7 +573,7 @@ export class Visual implements IVisual {
                     event.stopPropagation();
                     const indexStr = d3.select(this).attr("data-index");
                     if (indexStr == null) return;
-                    const dpIndex = parseInt(indexStr) % dataPointCount;
+                    const dpIndex = parseInt(indexStr);
                     if (dpIndex >= 0 && dpIndex < self.selectionIds.length) {
                         self.selectionManager.select(self.selectionIds[dpIndex], false);
                         self.triggerDrill(powerbi.DrillType?.Down ?? 0);
@@ -630,7 +634,7 @@ export class Visual implements IVisual {
                 const el = d3.select(this);
                 const indexStr = el.attr("data-index");
                 if (indexStr != null) {
-                    const dpIndex = parseInt(indexStr) % dataPointCount;
+                    const dpIndex = parseInt(indexStr);
                     if (selectedDpIndices.has(dpIndex)) {
                         el.style("opacity", "1");
                         // Add selection indicator stroke for rect elements

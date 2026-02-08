@@ -100,6 +100,7 @@ export class ColumnChart extends BaseChart {
                 const value = d[s.key] || 0;
                 if (value > 0) {
                     this.container.append("rect")
+                        .attr("data-dp-index", String(di))
                         .attr("x", xPos + i * barWidth)
                         .attr("y", yScale(value))
                         .attr("width", barWidth - 2)
@@ -141,6 +142,7 @@ export class ColumnChart extends BaseChart {
                 const value = d[s.key] || 0;
                 if (value > 0) {
                     this.container.append("rect")
+                        .attr("data-dp-index", String(di))
                         .attr("x", xPos)
                         .attr("y", yScale(stackBase + value))
                         .attr("width", barWidth)

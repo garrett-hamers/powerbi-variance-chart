@@ -84,6 +84,7 @@ export class BarChart extends BaseChart {
                 const value = d[s.key] as number || 0;
                 if (value > 0) {
                     this.container.append("rect")
+                        .attr("data-dp-index", String(di))
                         .attr("x", 0)
                         .attr("y", yPos + i * barHeight)
                         .attr("width", xScale(value))
