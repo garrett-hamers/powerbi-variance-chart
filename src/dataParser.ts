@@ -4,6 +4,11 @@
 import powerbi from "powerbi-visuals-api";
 import DataView = powerbi.DataView;
 
+export interface TooltipField {
+    displayName: string;
+    value: string;
+}
+
 export interface DataPoint {
     category: string;
     group: string;
@@ -19,6 +24,7 @@ export interface DataPoint {
     varianceToPYPct: number;
     varianceToFC: number;
     varianceToFCPct: number;
+    tooltipFields?: TooltipField[];
     // For waterfall
     index: number;
 }
@@ -77,6 +83,7 @@ export function parseDataView(dataView: DataView): ParsedData | null {
     let budgetValues: powerbi.PrimitiveValue[] = [];
     let pyValues: powerbi.PrimitiveValue[] = [];
     let forecastValues: powerbi.PrimitiveValue[] = [];
+    const tooltipColumns: Array<{ displayName: string; values: powerbi.PrimitiveValue[] }> = [];
 
     for (const valueColumn of values) {
         const roles = valueColumn.source.roles;
@@ -85,6 +92,12 @@ export function parseDataView(dataView: DataView): ParsedData | null {
             if (roles["budget"]) budgetValues = valueColumn.values;
             if (roles["previousYear"]) pyValues = valueColumn.values;
             if (roles["forecast"]) forecastValues = valueColumn.values;
+            if (roles["tooltips"]) {
+                tooltipColumns.push({
+                    displayName: valueColumn.source.displayName || "Tooltip",
+                    values: valueColumn.values
+                });
+            }
         }
     }
 
@@ -111,6 +124,15 @@ export function parseDataView(dataView: DataView): ParsedData | null {
         const forecast = hasForecast ? (Number(forecastValues[i]) || 0) : 0;
         const group = hasGroups ? String(groupValues[i] || "") : "";
         const comment = hasComments ? String(commentValues[i] || "") : "";
+        const tooltipFields = tooltipColumns
+            .map((column) => {
+                const rawValue = column.values[i];
+                if (rawValue == null || rawValue === "") {
+                    return null;
+                }
+                return { displayName: column.displayName, value: String(rawValue) };
+            })
+            .filter((field): field is TooltipField => field !== null);
 
         if (group) groupsSet.add(group);
 
@@ -138,6 +160,7 @@ export function parseDataView(dataView: DataView): ParsedData | null {
             varianceToPYPct,
             varianceToFC,
             varianceToFCPct,
+            tooltipFields,
             index: i
         };
 

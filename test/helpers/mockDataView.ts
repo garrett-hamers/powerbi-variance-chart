@@ -10,6 +10,10 @@ export interface MockDataInput {
     budget?: number[];
     previousYear?: number[];
     forecast?: number[];
+    tooltipMeasures?: Array<{
+        displayName: string;
+        values: Array<string | number | boolean | null | undefined>;
+    }>;
     comments?: string[];
     groups?: string[];
 }
@@ -96,6 +100,19 @@ export function buildMockDataView(input: MockDataInput): any {
                 roles: { forecast: true }
             },
             values: input.forecast
+        });
+    }
+
+    if (input.tooltipMeasures) {
+        input.tooltipMeasures.forEach((measure, index) => {
+            valueColumns.push({
+                source: {
+                    displayName: measure.displayName,
+                    queryName: `Table.Tooltip${index + 1}`,
+                    roles: { tooltips: true }
+                },
+                values: measure.values
+            });
         });
     }
 

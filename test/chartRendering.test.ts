@@ -581,6 +581,52 @@ describe("Edge cases", () => {
         }
     });
 
+    it("column chart renders only the selected compare-against series", () => {
+        const dv = buildMockDataView({
+            categories: ["A", "B", "C"],
+            actual: [100, 200, 150],
+            budget: [90, 210, 140],
+            previousYear: [80, 190, 160],
+            forecast: [95, 205, 145]
+        });
+        const data = parseDataView(dv)!;
+
+        const forecastSettings = defaultSettings({ comparisonType: "forecast" });
+        createChart("column", container, data, forecastSettings, defaultDimensions()).render();
+
+        expect(container.selectAll(`rect[fill="${forecastSettings.colors.forecast}"]`).size()).toBeGreaterThan(0);
+        expect(container.selectAll(`rect[fill="${forecastSettings.colors.budget}"]`).size()).toBe(0);
+        expect(container.selectAll(`rect[fill="${forecastSettings.colors.previousYear}"]`).size()).toBe(0);
+
+        container.selectAll("*").remove();
+        container.attr("transform", null);
+
+        const pySettings = defaultSettings({ comparisonType: "previousYear" });
+        createChart("column", container, data, pySettings, defaultDimensions()).render();
+
+        expect(container.selectAll(`rect[fill="${pySettings.colors.previousYear}"]`).size()).toBeGreaterThan(0);
+        expect(container.selectAll(`rect[fill="${pySettings.colors.budget}"]`).size()).toBe(0);
+        expect(container.selectAll(`rect[fill="${pySettings.colors.forecast}"]`).size()).toBe(0);
+    });
+
+    it("bar chart renders only the selected compare-against series", () => {
+        const dv = buildMockDataView({
+            categories: ["A", "B", "C"],
+            actual: [100, 200, 150],
+            budget: [90, 210, 140],
+            previousYear: [80, 190, 160],
+            forecast: [95, 205, 145]
+        });
+        const data = parseDataView(dv)!;
+
+        const forecastSettings = defaultSettings({ comparisonType: "forecast" });
+        createChart("bar", container, data, forecastSettings, defaultDimensions()).render();
+
+        expect(container.selectAll(`rect[fill="${forecastSettings.colors.forecast}"]`).size()).toBeGreaterThan(0);
+        expect(container.selectAll(`rect[fill="${forecastSettings.colors.budget}"]`).size()).toBe(0);
+        expect(container.selectAll(`rect[fill="${forecastSettings.colors.previousYear}"]`).size()).toBe(0);
+    });
+
     it("renders data labels disabled without error", () => {
         const settings = defaultSettings({
             dataLabels: { ...defaultSettings().dataLabels, show: false }
@@ -591,12 +637,57 @@ describe("Edge cases", () => {
         }).not.toThrow();
     });
 
-    it("renders with inverted variance", () => {
-        const settings = defaultSettings({ invertVariance: true });
-        expect(() => {
-            const chart = createChart("variance", container, sampleData(), settings, defaultDimensions());
-            chart.render();
-        }).not.toThrow();
+    it("invertVariance flips variance polarity colors in variance chart", () => {
+        const dv = buildMockDataView({
+            categories: ["A", "B", "C"],
+            actual: [100, 80, 120],
+            budget: [90, 110, 100]
+        });
+        const data = parseDataView(dv)!;
+
+        const normal = defaultSettings({ invertVariance: false });
+        createChart("variance", container, data, normal, defaultDimensions()).render();
+        const normalPos = container.selectAll(`rect[fill="${normal.colors.positiveVariance}"]`).size();
+        const normalNeg = container.selectAll(`rect[fill="${normal.colors.negativeVariance}"]`).size();
+        expect(normalPos).toBe(2);
+        expect(normalNeg).toBe(1);
+
+        container.selectAll("*").remove();
+        container.attr("transform", null);
+
+        const inverted = defaultSettings({ invertVariance: true });
+        createChart("variance", container, data, inverted, defaultDimensions()).render();
+        const invPos = container.selectAll(`rect[fill="${inverted.colors.positiveVariance}"]`).size();
+        const invNeg = container.selectAll(`rect[fill="${inverted.colors.negativeVariance}"]`).size();
+        expect(invPos).toBe(1);
+        expect(invNeg).toBe(2);
+    });
+
+    it("invertVariance keeps waterfall bridge connected to actual total", () => {
+        const dv = buildMockDataView({
+            categories: ["A", "B", "C"],
+            actual: [80, 90, 95],
+            budget: [100, 100, 100]
+        });
+        const data = parseDataView(dv)!;
+
+        for (const invertVariance of [false, true]) {
+            container.selectAll("*").remove();
+            container.attr("transform", null);
+
+            const settings = defaultSettings({ invertVariance });
+            createChart("waterfall", container, data, settings, defaultDimensions()).render();
+
+            const connectors = container.selectAll('line[stroke-dasharray="2,2"]');
+            const lastConnector = connectors.nodes()[connectors.size() - 1] as SVGLineElement;
+            const connectorY = Number(lastConnector.getAttribute("y1"));
+
+            const totalRects = container.selectAll(`rect[fill="${settings.colors.actual}"]`).nodes() as SVGRectElement[];
+            const actualTotalRect = totalRects[totalRects.length - 1];
+            const actualY = Number(actualTotalRect.getAttribute("y"));
+
+            expect(Math.abs(connectorY - actualY)).toBeLessThan(0.001);
+        }
     });
 
     it("container transform from non-group render does not leak into group render", () => {

@@ -837,6 +837,12 @@ export class Visual implements IVisual {
                 { displayName: "Forecast", value: formatNumber(dp.forecast, { scale: "auto" }) }
             );
         }
+        if (dp.tooltipFields && dp.tooltipFields.length > 0) {
+            tooltipItems.push(...dp.tooltipFields.map((field) => ({
+                displayName: field.displayName,
+                value: field.value
+            })));
+        }
         if (dp.comment) {
             tooltipItems.push({ displayName: "Comment", value: dp.comment });
         }

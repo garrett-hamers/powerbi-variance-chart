@@ -90,6 +90,40 @@ describe("parseDataView", () => {
         expect(result.dataPoints[1].comment).toBe("");
     });
 
+    it("parses tooltips role measures into data points", () => {
+        const dv = buildMockDataView({
+            categories: ["Jan", "Feb"],
+            actual: [100, 200],
+            tooltipMeasures: [
+                { displayName: "Gross Margin", values: [35, 42] },
+                { displayName: "Owner", values: ["Alice", "Bob"] }
+            ]
+        });
+        const result = parseDataView(dv)!;
+        expect(result.dataPoints[0].tooltipFields).toEqual([
+            { displayName: "Gross Margin", value: "35" },
+            { displayName: "Owner", value: "Alice" }
+        ]);
+        expect(result.dataPoints[1].tooltipFields).toEqual([
+            { displayName: "Gross Margin", value: "42" },
+            { displayName: "Owner", value: "Bob" }
+        ]);
+    });
+
+    it("skips null or empty tooltip values but keeps zero", () => {
+        const dv = buildMockDataView({
+            categories: ["Jan", "Feb", "Mar"],
+            actual: [100, 200, 300],
+            tooltipMeasures: [
+                { displayName: "KPI", values: [null, 0, ""] }
+            ]
+        });
+        const result = parseDataView(dv)!;
+        expect(result.dataPoints[0].tooltipFields).toEqual([]);
+        expect(result.dataPoints[1].tooltipFields).toEqual([{ displayName: "KPI", value: "0" }]);
+        expect(result.dataPoints[2].tooltipFields).toEqual([]);
+    });
+
     it("calculates totals across all data points", () => {
         const dv = buildMockDataView({
             categories: ["A", "B", "C"],

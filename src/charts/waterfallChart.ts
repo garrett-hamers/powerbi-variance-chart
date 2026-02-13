@@ -3,7 +3,7 @@
  */
 import * as d3 from "d3";
 import { BaseChart, ChartSettings, ChartDimensions } from "./baseChart";
-import { ParsedData } from "../dataParser";
+import { ParsedData, getVariance, getVariancePct } from "../dataParser";
 
 interface WaterfallItem {
     label: string;
@@ -70,13 +70,15 @@ export class WaterfallChart extends BaseChart {
                 });
             } else {
                 // Normal variance step
-                const variance = this.getVarianceForPoint(d);
-                const variancePct = this.getVariancePctForPoint(d);
-                const newTotal = runningTotal + variance;
+                const rawVariance = getVariance(d, this.settings.comparisonType);
+                const rawVariancePct = getVariancePct(d, this.settings.comparisonType);
+                const variance = this.settings.invertVariance ? -rawVariance : rawVariance;
+                const variancePct = this.settings.invertVariance ? -rawVariancePct : rawVariancePct;
+                const newTotal = runningTotal + rawVariance;
                 
                 waterfallData.push({
                     label: d.category,
-                    value: variance,
+                    value: rawVariance,
                     start: runningTotal,
                     end: newTotal,
                     isTotal: false,
@@ -136,7 +138,8 @@ export class WaterfallChart extends BaseChart {
                 y = yScale(d.end);
                 barHeight = Math.abs(yScale(0) - yScale(d.end));
             } else {
-                barColor = d.value >= 0 
+                const displayVariance = d.variance ?? d.value;
+                barColor = displayVariance >= 0 
                     ? this.settings.colors.positiveVariance 
                     : this.settings.colors.negativeVariance;
                 y = yScale(Math.max(d.start, d.end));
@@ -182,8 +185,9 @@ export class WaterfallChart extends BaseChart {
                     const sign = d.variancePct >= 0 ? "+" : "";
                     labelText = `${sign}${d.variancePct.toFixed(1)}%`;
                 } else {
-                    const sign = d.value >= 0 ? "+" : "";
-                    labelText = `${sign}${this.formatValue(d.value)}`;
+                    const displayVariance = d.variance ?? d.value;
+                    const sign = displayVariance >= 0 ? "+" : "";
+                    labelText = `${sign}${this.formatValue(displayVariance)}`;
                 }
 
                 this.container.append("text")

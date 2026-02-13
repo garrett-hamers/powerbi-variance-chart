@@ -92,7 +92,7 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
 | **Top N + Others** | Enable, count, sort by/direction, show Others, Others label |
 | **Small Multiples** | Grid columns, spacing, show headers, scale mode |
 | **Responsive Design** | Enable, minimum chart width |
-| **Interaction** | Selection, tooltips, drilldown, cross-filter mode, telemetry |
+| **Interaction** | Selection, tooltips, drilldown, cross-filter mode |
 
 ---
 

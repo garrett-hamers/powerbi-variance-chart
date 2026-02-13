@@ -3,7 +3,7 @@
  */
 import * as d3 from "d3";
 import { BaseChart, ChartSettings, ChartDimensions } from "./baseChart";
-import { ParsedData } from "../dataParser";
+import { ParsedData, DataPoint } from "../dataParser";
 
 export class ColumnChart extends BaseChart {
     private stacked: boolean;
@@ -35,22 +35,23 @@ export class ColumnChart extends BaseChart {
             { key: "actual", color: this.settings.colors.actual, label: "Actual" }
         ];
         
-        if (hasBudget) {
-            series.push({ key: "budget", color: this.settings.colors.budget, label: "Budget" });
-        }
-        if (hasPreviousYear) {
-            series.push({ key: "previousYear", color: this.settings.colors.previousYear, label: "Previous Year" });
-        }
-        if (hasForecast) {
-            series.push({ key: "forecast", color: this.settings.colors.forecast, label: "Forecast" });
+        const selectedComparison =
+            this.settings.comparisonType === "previousYear"
+                ? (hasPreviousYear ? { key: "previousYear", color: this.settings.colors.previousYear, label: "Previous Year" } : null)
+                : this.settings.comparisonType === "forecast"
+                    ? (hasForecast ? { key: "forecast", color: this.settings.colors.forecast, label: "Forecast" } : null)
+                    : (hasBudget ? { key: "budget", color: this.settings.colors.budget, label: "Budget" } : null);
+        if (selectedComparison) {
+            series.push(selectedComparison);
         }
 
         // Calculate max value
         const localMax = d3.max(dataPoints, d => {
+            const seriesValues = series.map(s => Number((d as any)[s.key]) || 0);
             if (this.stacked) {
-                return d.actual + d.budget + d.previousYear + d.forecast;
+                return seriesValues.reduce((sum, value) => sum + Math.max(0, value), 0);
             }
-            return Math.max(d.actual, d.budget, d.previousYear, d.forecast);
+            return d3.max(seriesValues) || 0;
         }) || 0;
         const maxValue = this.getEffectiveMax(localMax);
 
@@ -82,7 +83,7 @@ export class ColumnChart extends BaseChart {
     }
 
     private renderGrouped(
-        dataPoints: any[],
+        dataPoints: DataPoint[],
         series: Array<{ key: string; color: string; label: string }>,
         xScale: d3.ScaleBand<string>,
         yScale: d3.ScaleLinear<number, number>
@@ -123,7 +124,7 @@ export class ColumnChart extends BaseChart {
     }
 
     private renderStacked(
-        dataPoints: any[],
+        dataPoints: DataPoint[],
         series: Array<{ key: string; color: string; label: string }>,
         xScale: d3.ScaleBand<string>,
         yScale: d3.ScaleLinear<number, number>

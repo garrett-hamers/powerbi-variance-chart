@@ -552,8 +552,7 @@ class InteractionCard extends FormattingSettingsCard {
         this.enableSelection,
         this.enableTooltips,
         this.enableDrilldown,
-        this.crossFilterMode,
-        this.enableTelemetry
+        this.crossFilterMode
     ];
 }
 

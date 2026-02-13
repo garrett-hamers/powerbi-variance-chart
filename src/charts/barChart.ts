@@ -27,12 +27,18 @@ export class BarChart extends BaseChart {
         const series: Array<{ key: string; color: string; label: string }> = [
             { key: "actual", color: this.settings.colors.actual, label: "Actual" }
         ];
-        if (hasBudget) series.push({ key: "budget", color: this.settings.colors.budget, label: "Plan" });
-        if (hasPreviousYear) series.push({ key: "previousYear", color: this.settings.colors.previousYear, label: "Previous Year" });
-        if (hasForecast) series.push({ key: "forecast", color: this.settings.colors.forecast, label: "Forecast" });
+        const selectedComparison =
+            this.settings.comparisonType === "previousYear"
+                ? (hasPreviousYear ? { key: "previousYear", color: this.settings.colors.previousYear, label: "Previous Year" } : null)
+                : this.settings.comparisonType === "forecast"
+                    ? (hasForecast ? { key: "forecast", color: this.settings.colors.forecast, label: "Forecast" } : null)
+                    : (hasBudget ? { key: "budget", color: this.settings.colors.budget, label: "Plan" } : null);
+        if (selectedComparison) {
+            series.push(selectedComparison);
+        }
 
         const localMax = d3.max(dataPoints, d =>
-            Math.max(d.actual, d.budget, d.previousYear, d.forecast)
+            d3.max(series.map((s) => Number((d as any)[s.key]) || 0)) || 0
         ) || 0;
         const maxValue = this.getEffectiveMax(localMax);
 
