@@ -197,7 +197,9 @@ export function parseDataView(dataView: DataView): ParsedData | null {
 }
 
 function calculatePercentage(variance: number, base: number): number {
-    if (base === 0) return 0;
+    // Return NaN when the base is zero so downstream formatters can render a
+    // "no-data" glyph (em-dash) instead of a misleading 0.0%.
+    if (base === 0) return NaN;
     return (variance / Math.abs(base)) * 100;
 }
 

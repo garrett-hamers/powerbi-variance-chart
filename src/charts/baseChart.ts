@@ -92,6 +92,8 @@ export interface ChartSettings {
     showPercentage: boolean;
     fontSize: number;
     fontColor: string;
+    backgroundColor?: string;
+    focusColor?: string;
 }
 
 export interface Rect {
@@ -356,7 +358,7 @@ export abstract class BaseChart {
                 .attr("x", x + 18)
                 .attr("y", y + 10)
                 .attr("font-size", `${this.settings.legend.fontSize}px`)
-                .attr("fill", "#333")
+                .attr("fill", this.settings.fontColor)
                 .text(item.label);
         });
     }
@@ -366,7 +368,7 @@ export abstract class BaseChart {
         if (!commentBox.show) return;
 
         const comments = this.data.dataPoints
-            .map((d, i) => ({ dp: d, index: i }))
+            .map((d) => ({ dp: d, index: d.index }))
             .filter(({ dp }) => dp.comment && dp.comment.trim() !== "");
         if (comments.length === 0) return;
 
@@ -452,7 +454,7 @@ export abstract class BaseChart {
 
             const valueLine = content.append("xhtml:div")
                 .style("font-size", `${fontSize}px`)
-                .style("color", "#333")
+                .style("color", commentBox.fontColor)
                 .style("line-height", "1.4");
 
             valueLine.append("xhtml:span").text(`${valueStr}${variancePart}`);
@@ -484,7 +486,7 @@ export abstract class BaseChart {
                 if (commentText.length > 0) {
                     content.append("xhtml:div")
                         .style("font-size", `${fontSize - 1}px`)
-                        .style("color", "#666")
+                        .style("color", commentBox.fontColor)
                         .style("line-height", "1.4")
                         .style("word-wrap", "break-word")
                         .text(commentText);
@@ -505,7 +507,7 @@ export abstract class BaseChart {
         if (!commentBox.show) return;
 
         const comments = this.data.dataPoints
-            .map((d, i) => ({ dp: d, index: i }))
+            .map((d) => ({ dp: d, index: d.index }))
             .filter(({ dp }) => dp.comment && dp.comment.trim() !== "");
         if (comments.length === 0) return;
 
@@ -557,7 +559,7 @@ export abstract class BaseChart {
             .attr("y", y - 4)
             .attr("width", w + 20)
             .attr("height", 8)
-            .attr("fill", "white")
+            .attr("fill", this.settings.backgroundColor || "white")
             .attr("stroke", "none");
         
         // Zigzag line spanning chart width
@@ -570,7 +572,7 @@ export abstract class BaseChart {
         
         this.container.append("path")
             .attr("d", zigzagPath)
-            .attr("stroke", "#999")
+            .attr("stroke", this.settings.fontColor)
             .attr("stroke-width", 1.5)
             .attr("fill", "none");
     }
@@ -597,7 +599,7 @@ export abstract class BaseChart {
         pattern.append("line")
             .attr("x1", 0).attr("y1", 0)
             .attr("x2", 0).attr("y2", 6)
-            .attr("stroke", "white")
+            .attr("stroke", this.settings.backgroundColor || "white")
             .attr("stroke-width", 2);
     }
 }

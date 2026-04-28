@@ -21,7 +21,7 @@ import ITooltipService = powerbi.extensibility.ITooltipService;
 import VisualTooltipDataItem = powerbi.extensibility.VisualTooltipDataItem;
 
 import { VisualFormattingSettingsModel } from "./settings";
-import { parseDataView, ParsedData, ComparisonType, DataPoint, applyTopN, getVariance, getVariancePct } from "./dataParser";
+import { parseDataView, ParsedData, ComparisonType, DataPoint, applyTopN, getComparisonValue, getVariance, getVariancePct } from "./dataParser";
 import { createChart, ChartType, ChartSettings, ChartDimensions, ChartLayout, Rect } from "./charts";
 import { IBCSColors, DEFAULT_IBCS_COLORS } from "./utils/colors";
 import { formatNumber, formatPercent } from "./utils/formatting";
@@ -46,7 +46,8 @@ export class Visual implements IVisual {
     private parsedData: ParsedData | null;
     private selectionIds: ISelectionId[] = [];
     private isHighContrast: boolean = false;
-    private highContrastColors: { foreground: string; background: string; } | null = null;
+    private highContrastColors: { foreground: string; background: string; foregroundSelected: string; hyperlink: string; } | null = null;
+    private selectedDataPointIndices: Set<number> = new Set();
 
     constructor(options: VisualConstructorOptions) {
         this.formattingSettingsService = new FormattingSettingsService();
@@ -64,8 +65,10 @@ export class Visual implements IVisual {
             this.isHighContrast = palette.isHighContrast;
             if (this.isHighContrast && palette.foreground && palette.background) {
                 this.highContrastColors = {
-                    foreground: palette.foreground.value,
-                    background: palette.background.value
+                    foreground: this.readPaletteColor(palette.foreground, "#ffffff"),
+                    background: this.readPaletteColor(palette.background, "#000000"),
+                    foregroundSelected: this.readPaletteColor(palette.foregroundSelected, this.readPaletteColor(palette.foreground, "#ffffff")),
+                    hyperlink: this.readPaletteColor(palette.hyperlink, this.readPaletteColor(palette.foregroundSelected, "#ffffff"))
                 };
             }
         }
@@ -86,10 +89,10 @@ export class Visual implements IVisual {
         // Handle context menu
         this.svg.on("contextmenu", (event: MouseEvent) => {
             event.preventDefault();
-            this.selectionManager.showContextMenu(
-                {},
-                { x: event.clientX, y: event.clientY }
-            );
+            const target = event.target as Element | null;
+            const dataElement = target?.closest?.("[data-index]");
+            const dataIndex = dataElement ? this.getDataIndexFromElement(dataElement) : null;
+            this.showContextMenuForDataIndex(dataIndex, event.clientX, event.clientY);
         });
     }
 
@@ -243,6 +246,15 @@ export class Visual implements IVisual {
             const fontColor = this.isHighContrast 
                 ? this.highContrastColors!.foreground 
                 : this.formattingSettings.categoriesCard.fontColor.value.value;
+            const titleFontColor = this.isHighContrast
+                ? this.highContrastColors!.foreground
+                : this.formattingSettings.titleCard.fontColor.value.value;
+            const commentFontColor = this.isHighContrast
+                ? this.highContrastColors!.foreground
+                : this.formattingSettings.commentBoxCard.fontColor.value.value;
+            const commentMarkerColor = this.isHighContrast
+                ? this.highContrastColors!.foregroundSelected
+                : this.formattingSettings.commentBoxCard.markerColor.value.value;
 
             const chartSettings: ChartSettings = {
                 // Core settings
@@ -255,7 +267,7 @@ export class Visual implements IVisual {
                     show: this.formattingSettings.titleCard.show.value,
                     text: this.formattingSettings.titleCard.titleText.value || "",
                     fontSize: this.formattingSettings.titleCard.fontSize.value,
-                    fontColor: this.formattingSettings.titleCard.fontColor.value.value,
+                    fontColor: titleFontColor,
                     alignment: this.formattingSettings.titleCard.alignment.value.value as "left" | "center" | "right"
                 },
                 
@@ -296,9 +308,9 @@ export class Visual implements IVisual {
                     padding: this.formattingSettings.commentBoxCard.padding.value,
                     gap: this.formattingSettings.commentBoxCard.gap.value,
                     fontSize: this.formattingSettings.commentBoxCard.fontSize.value,
-                    fontColor: this.formattingSettings.commentBoxCard.fontColor.value.value,
+                    fontColor: commentFontColor,
                     markerSize: this.formattingSettings.commentBoxCard.markerSize.value,
-                    markerColor: this.formattingSettings.commentBoxCard.markerColor.value.value
+                    markerColor: commentMarkerColor
                 },
                 
                 // Difference highlighting
@@ -319,7 +331,9 @@ export class Visual implements IVisual {
                 showVarianceLabels: this.formattingSettings.dataLabelsCard.showVariance.value,
                 showPercentage: this.formattingSettings.dataLabelsCard.showPercentage.value,
                 fontSize: this.formattingSettings.dataLabelsCard.fontSize.value,
-                fontColor: fontColor
+                fontColor: fontColor,
+                backgroundColor: this.getBackgroundColor(),
+                focusColor: this.getFocusColor()
             };
 
             // Apply responsive overrides
@@ -368,33 +382,17 @@ export class Visual implements IVisual {
 
                 // Add interactivity after rendering (assigns data-index attributes)
                 this.addInteractivity(chartType, comparisonType);
+            }
 
-                // Check for cross-highlighting from other visuals (must run after addInteractivity tags elements)
-                const hasHighlights = this.dataView?.categorical?.values?.some(v => v.highlights != null) || false;
-                if (hasHighlights && this.dataView?.categorical?.values) {
-                    const highlights = this.dataView.categorical.values[0]?.highlights;
-                    if (highlights) {
-                        const dpCount = this.parsedData?.dataPoints.length || 1;
-                        this.chartContainer.selectAll("rect[data-index], circle[data-index]").each(function() {
-                            d3.select(this).style("opacity", "0.3");
-                        });
-                        this.chartContainer.selectAll("rect[data-index], circle[data-index]").each(function() {
-                            const el = d3.select(this);
-                            const indexStr = el.attr("data-index");
-                            if (indexStr != null) {
-                                const dpIndex = parseInt(indexStr);
-                                if (dpIndex < highlights.length && highlights[dpIndex] != null) {
-                                    el.style("opacity", "1");
-                                }
-                            }
-                        });
-                    }
-                }
+            if (this.parsedData.hasGroups && this.parsedData.groups.length > 1) {
+                this.addInteractivity(chartType, comparisonType);
+            }
 
-                // Show drill-up button if drilled down
-                if (this.formattingSettings.interactionCard.enableDrilldown.value) {
-                    this.renderDrillUpButton();
-                }
+            // Cross-highlighting must run after addInteractivity normalizes data-index attributes.
+            this.applyCrossHighlighting();
+
+            if (this.formattingSettings.interactionCard.enableDrilldown.value) {
+                this.renderDrillUpButton();
             }
 
             // Signal render finished
@@ -414,6 +412,23 @@ export class Visual implements IVisual {
             this.host.eventService?.renderingFailed(options, errorMessage);
             throw error;
         }
+    }
+
+    private applyCrossHighlighting(): void {
+        const highlights = this.dataView?.categorical?.values?.[0]?.highlights;
+        if (!highlights) return;
+
+        const marks = this.getDataMarksSelection();
+        marks.style("opacity", "0.3");
+        marks.each(function() {
+            const el = d3.select(this);
+            const indexStr = el.attr("data-index");
+            if (indexStr == null) return;
+            const dataIndex = parseInt(indexStr, 10);
+            if (Number.isFinite(dataIndex) && dataIndex < highlights.length && highlights[dataIndex] != null) {
+                el.style("opacity", "1");
+            }
+        });
     }
 
     private createSelectionIds(): void {
@@ -452,134 +467,350 @@ export class Visual implements IVisual {
     private addInteractivity(chartType: ChartType, comparisonType: ComparisonType): void {
         const interactionSettings = this.formattingSettings.interactionCard;
         const self = this;
-        const dataPointCount = this.parsedData?.dataPoints.length || 1;
 
-        // Use data-dp-index set by chart renderers for accurate data point mapping.
-        // For elements without data-dp-index, fall back to sequential data-index tagging.
-        let fallbackIndex = 0;
-        this.chartContainer.selectAll("rect").each(function() {
+        const dataMarks = this.getDataMarksSelection();
+
+        dataMarks.each(function() {
             const el = d3.select(this);
-            const fill = el.attr("fill");
-            if (fill && fill !== "none" && fill !== "white" && fill !== "#fff") {
-                // Prefer data-dp-index from chart renderer, copy to data-index for uniform access
-                const dpIndex = el.attr("data-dp-index");
-                if (dpIndex != null) {
-                    el.attr("data-index", dpIndex);
-                } else {
-                    el.attr("data-index", String(fallbackIndex % dataPointCount));
-                    fallbackIndex++;
-                }
-                el.style("cursor", interactionSettings.enableSelection.value ? "pointer" : "default");
+            const dataIndex = self.normalizeDataMarkIndex(el, chartType);
+            const dp = dataIndex == null ? undefined : self.getDataPointByIndex(dataIndex);
+            if (dataIndex == null || !dp) {
+                el.attr("data-index", null)
+                    .attr("data-dp-index", null)
+                    .attr("tabindex", null)
+                    .attr("role", null)
+                    .attr("aria-label", null)
+                    .attr("aria-pressed", null);
+                return;
             }
+
+            self.saveOriginalStroke(el);
+            el.attr("data-dp-index", String(dataIndex))
+                .attr("data-index", String(dataIndex))
+                .attr("tabindex", "0")
+                .attr("focusable", "true")
+                .attr("role", "button")
+                .attr("aria-label", self.buildDataPointAriaLabel(dp, comparisonType))
+                .attr("aria-pressed", self.selectedDataPointIndices.has(dataIndex) ? "true" : "false")
+                .classed("data-mark", true)
+                .style("cursor", interactionSettings.enableSelection.value ? "pointer" : "context-menu");
         });
 
-        this.chartContainer.selectAll("circle").each(function() {
-            const el = d3.select(this);
-            if (el.classed("comment-marker") || el.classed("comment-card-marker")) return;
-            const dpIndex = el.attr("data-dp-index");
-            if (dpIndex != null) {
-                el.attr("data-index", dpIndex);
-            }
-            el.style("cursor", interactionSettings.enableSelection.value ? "pointer" : "default");
-        });
+        dataMarks
+            .on("contextmenu", function(event: MouseEvent) {
+                event.preventDefault();
+                event.stopPropagation();
+                const dataIndex = self.getDataIndexFromElement(this as Element);
+                self.showContextMenuForDataIndex(dataIndex, event.clientX, event.clientY);
+            })
+            .on("keydown", function(event: KeyboardEvent) {
+                self.handleDataMarkKeydown(event, this as Element, comparisonType);
+            });
 
-        // Selection click handlers
         if (interactionSettings.enableSelection.value) {
-            const crossFilterMode = String(interactionSettings.crossFilterMode.value.value);
-
-            this.chartContainer.selectAll("rect[data-index], circle[data-index]")
+            dataMarks
                 .on("click", function(event: MouseEvent) {
                     event.stopPropagation();
-                    const indexStr = d3.select(this).attr("data-index");
-                    if (indexStr == null) return;
-                    const dpIndex = parseInt(indexStr);
-                    if (dpIndex >= 0 && dpIndex < self.selectionIds.length) {
-                        const isMultiSelect = event.ctrlKey || event.metaKey;
-                        self.selectionManager.select(self.selectionIds[dpIndex], isMultiSelect)
-                            .then((ids: ISelectionId[]) => {
-                                self.syncSelectionState(ids);
-                            });
-
-                        // Always apply cross-filter so other visuals (including slicers) respond
-                        self.applyCrossFilter(dpIndex, isMultiSelect);
-                    }
-                    // Highlight the matching comment card and marker
-                    self.highlightComment(dpIndex);
+                    const dataIndex = self.getDataIndexFromElement(this as Element);
+                    if (dataIndex == null) return;
+                    self.selectDataPoint(dataIndex, event.ctrlKey || event.metaKey);
                 });
 
             // Click on empty space to clear selection
             this.svg.on("click", function(event: MouseEvent) {
                 if ((event.target as Element).tagName === "svg" || 
                     d3.select(event.target as Element).attr("data-index") == null) {
-                    self.selectionManager.clear().then(() => {
-                        self.syncSelectionState([]);
-                    });
-                    self.highlightComment(-1);
-                    self.clearCrossFilter();
+                    self.clearSelectionAndFilters();
                 }
             });
         }
 
         // Tooltip handlers
         if (interactionSettings.enableTooltips.value) {
-            this.chartContainer.selectAll("rect[data-index], circle[data-index]")
+            dataMarks
                 .on("mouseover", function(event: MouseEvent) {
-                    const indexStr = d3.select(this).attr("data-index");
-                    if (indexStr == null) return;
-                    const dpIndex = parseInt(indexStr);
-                    const dp = self.parsedData?.dataPoints[dpIndex];
-                    if (!dp) return;
-
-                    const tooltipData = self.buildTooltipForDataPoint(dp, comparisonType);
-                    self.tooltipService.show({
-                        dataItems: tooltipData,
-                        identities: dpIndex < self.selectionIds.length ? [self.selectionIds[dpIndex]] : [],
-                        coordinates: [event.clientX, event.clientY],
-                        isTouchEvent: false
-                    });
+                    const dataIndex = self.getDataIndexFromElement(this as Element);
+                    if (dataIndex == null) return;
+                    self.showTooltipForDataIndex(dataIndex, comparisonType, [event.clientX, event.clientY]);
                 })
                 .on("mousemove", function(event: MouseEvent) {
-                    const indexStr = d3.select(this).attr("data-index");
-                    if (indexStr == null) return;
-                    const dpIndex = parseInt(indexStr);
-                    const dp = self.parsedData?.dataPoints[dpIndex];
-                    if (!dp) return;
-
-                    const tooltipData = self.buildTooltipForDataPoint(dp, comparisonType);
-                    self.tooltipService.move({
-                        dataItems: tooltipData,
-                        identities: dpIndex < self.selectionIds.length ? [self.selectionIds[dpIndex]] : [],
-                        coordinates: [event.clientX, event.clientY],
-                        isTouchEvent: false
-                    });
+                    const dataIndex = self.getDataIndexFromElement(this as Element);
+                    if (dataIndex == null) return;
+                    self.moveTooltipForDataIndex(dataIndex, comparisonType, [event.clientX, event.clientY]);
                 })
                 .on("mouseout", function() {
-                    self.tooltipService.hide({
-                        immediately: true,
-                        isTouchEvent: false
-                    });
+                    self.hideTooltip();
+                })
+                .on("focus", function() {
+                    const dataIndex = self.getDataIndexFromElement(this as Element);
+                    if (dataIndex == null) return;
+                    self.showTooltipForDataIndex(dataIndex, comparisonType, self.getElementCenter(this as Element));
+                    self.highlightComment(dataIndex);
+                })
+                .on("blur", function() {
+                    self.hideTooltip();
                 });
         }
 
         // Drilldown support
         if (interactionSettings.enableDrilldown.value) {
-            this.chartContainer.selectAll("rect[data-index], circle[data-index]")
+            dataMarks
                 .on("dblclick", function(event: MouseEvent) {
                     event.stopPropagation();
-                    const indexStr = d3.select(this).attr("data-index");
-                    if (indexStr == null) return;
-                    const dpIndex = parseInt(indexStr);
-                    if (dpIndex >= 0 && dpIndex < self.selectionIds.length) {
-                        self.selectionManager.select(self.selectionIds[dpIndex], false);
+                    const dataIndex = self.getDataIndexFromElement(this as Element);
+                    const selectionId = dataIndex == null ? undefined : self.getSelectionIdForDataIndex(dataIndex);
+                    if (selectionId) {
+                        self.selectionManager.select(selectionId, false);
                         self.triggerDrill(powerbi.DrillType?.Down ?? 0);
                     }
                 });
         }
+
+        this.addCommentInteractivity(comparisonType);
+        this.updateDataMarkSelectionAttributes();
+    }
+
+    private getDataMarksSelection(): d3.Selection<Element, unknown, SVGGElement, unknown> {
+        return this.chartContainer
+            .selectAll<Element, unknown>("rect[data-dp-index], rect[data-index], circle[data-dp-index], circle[data-index]")
+            .filter(function() {
+                const el = d3.select(this);
+                return !el.classed("comment-marker") && !el.classed("comment-card-marker");
+            });
+    }
+
+    private normalizeDataMarkIndex(el: d3.Selection<Element, unknown, null, undefined>, chartType: ChartType): number | null {
+        const explicitIndex = el.attr("data-selection-index");
+        if (explicitIndex != null) {
+            const parsed = parseInt(explicitIndex, 10);
+            return Number.isFinite(parsed) ? parsed : null;
+        }
+
+        const rawAttr = el.attr("data-dp-index") ?? el.attr("data-index");
+        if (rawAttr == null) return null;
+
+        const rawIndex = parseInt(rawAttr, 10);
+        if (!Number.isFinite(rawIndex) || rawIndex < 0) return null;
+
+        if (chartType === "waterfall") {
+            const point = this.parsedData?.dataPoints[rawIndex - 1];
+            return point?.index ?? null;
+        }
+
+        const point = this.parsedData?.dataPoints[rawIndex];
+        return point?.index ?? rawIndex;
+    }
+
+    private getDataIndexFromElement(element: Element): number | null {
+        const indexStr = element.getAttribute("data-index") ?? element.getAttribute("data-dp-index");
+        if (indexStr == null) return null;
+        const dataIndex = parseInt(indexStr, 10);
+        return Number.isFinite(dataIndex) && dataIndex >= 0 ? dataIndex : null;
+    }
+
+    private getDataPointByIndex(dataIndex: number): DataPoint | undefined {
+        return this.parsedData?.dataPoints.find(point => point.index === dataIndex)
+            ?? this.parsedData?.dataPoints[dataIndex];
+    }
+
+    private getSelectionIdForDataIndex(dataIndex: number): ISelectionId | undefined {
+        return dataIndex >= 0 && dataIndex < this.selectionIds.length ? this.selectionIds[dataIndex] : undefined;
+    }
+
+    private selectDataPoint(dataIndex: number, isMultiSelect: boolean): void {
+        const selectionId = this.getSelectionIdForDataIndex(dataIndex);
+        if (!selectionId) return;
+
+        this.selectionManager.select(selectionId, isMultiSelect)
+            .then((ids: ISelectionId[]) => {
+                this.syncSelectionState(ids);
+            });
+
+        this.applyCrossFilter(dataIndex, isMultiSelect);
+        this.highlightComment(dataIndex);
+    }
+
+    private clearSelectionAndFilters(): void {
+        this.selectionManager.clear().then(() => {
+            this.syncSelectionState([]);
+        });
+        this.highlightComment(-1);
+        this.clearCrossFilter();
+    }
+
+    private handleDataMarkKeydown(event: KeyboardEvent, element: Element, comparisonType: ComparisonType): void {
+        const dataIndex = this.getDataIndexFromElement(element);
+        if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (dataIndex != null && this.formattingSettings.interactionCard.enableSelection.value) {
+                this.selectDataPoint(dataIndex, event.ctrlKey || event.metaKey);
+            }
+            return;
+        }
+
+        if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            this.clearSelectionAndFilters();
+            return;
+        }
+
+        if (event.key === "ContextMenu" || event.key === "Apps" || (event.shiftKey && event.key === "F10")) {
+            event.preventDefault();
+            event.stopPropagation();
+            const [x, y] = this.getElementCenter(element);
+            this.showContextMenuForDataIndex(dataIndex, x, y);
+            return;
+        }
+
+        if (event.key === "F2" && this.formattingSettings.interactionCard.enableTooltips.value && dataIndex != null) {
+            event.preventDefault();
+            this.showTooltipForDataIndex(dataIndex, comparisonType, this.getElementCenter(element));
+        }
+    }
+
+    private showContextMenuForDataIndex(dataIndex: number | null, x: number, y: number): void {
+        const selectionId = dataIndex == null ? undefined : this.getSelectionIdForDataIndex(dataIndex);
+        this.selectionManager.showContextMenu(selectionId ?? {}, { x, y });
+    }
+
+    private getElementCenter(element: Element): [number, number] {
+        const box = element.getBoundingClientRect();
+        return [box.left + box.width / 2, box.top + box.height / 2];
+    }
+
+    private showTooltipForDataIndex(dataIndex: number, comparisonType: ComparisonType, coordinates: [number, number]): void {
+        const dp = this.getDataPointByIndex(dataIndex);
+        if (!dp) return;
+        this.tooltipService.show({
+            dataItems: this.buildTooltipForDataPoint(dp, comparisonType),
+            identities: this.getSelectionIdForDataIndex(dataIndex) ? [this.getSelectionIdForDataIndex(dataIndex)!] : [],
+            coordinates,
+            isTouchEvent: false
+        });
+    }
+
+    private moveTooltipForDataIndex(dataIndex: number, comparisonType: ComparisonType, coordinates: [number, number]): void {
+        const dp = this.getDataPointByIndex(dataIndex);
+        if (!dp) return;
+        this.tooltipService.move({
+            dataItems: this.buildTooltipForDataPoint(dp, comparisonType),
+            identities: this.getSelectionIdForDataIndex(dataIndex) ? [this.getSelectionIdForDataIndex(dataIndex)!] : [],
+            coordinates,
+            isTouchEvent: false
+        });
+    }
+
+    private hideTooltip(): void {
+        this.tooltipService.hide({
+            immediately: true,
+            isTouchEvent: false
+        });
+    }
+
+    private buildDataPointAriaLabel(dp: DataPoint, comparisonType: ComparisonType): string {
+        const comparisonLabel = this.getComparisonLabel(comparisonType);
+        const comparison = getComparisonValue(dp, comparisonType);
+        const variance = getVariance(dp, comparisonType);
+        const variancePct = getVariancePct(dp, comparisonType);
+        const parts = [
+            dp.group ? `${dp.group}, ${dp.category}` : dp.category,
+            `Actual ${formatNumber(dp.actual, { scale: "auto" })}`
+        ];
+
+        if (comparison !== 0 || this.hasComparisonData(this.parsedData!, comparisonType)) {
+            parts.push(`${comparisonLabel} ${formatNumber(comparison, { scale: "auto" })}`);
+            parts.push(`Variance ${variance >= 0 ? "+" : ""}${formatNumber(variance, { scale: "auto" })} (${formatPercent(variancePct, 1, false)})`);
+        }
+        if (dp.comment) {
+            parts.push(`Comment ${dp.comment}`);
+        }
+        return parts.join(", ");
+    }
+
+    private saveOriginalStroke(el: d3.Selection<Element, unknown, null, undefined>): void {
+        if (el.attr("data-original-stroke") == null) {
+            el.attr("data-original-stroke", el.attr("stroke") ?? "");
+        }
+        if (el.attr("data-original-stroke-width") == null) {
+            el.attr("data-original-stroke-width", el.attr("stroke-width") ?? "");
+        }
+    }
+
+    private restoreOriginalStroke(el: d3.Selection<Element, unknown, null, undefined>): void {
+        const stroke = el.attr("data-original-stroke");
+        const strokeWidth = el.attr("data-original-stroke-width");
+        el.attr("stroke", stroke || null);
+        el.attr("stroke-width", strokeWidth || null);
+    }
+
+    private updateDataMarkSelectionAttributes(): void {
+        const selected = this.selectedDataPointIndices;
+        const focusColor = this.getFocusColor();
+        const visual = this;
+        this.getDataMarksSelection().each(function() {
+            const el = d3.select(this);
+            const indexStr = el.attr("data-index");
+            const dataIndex = indexStr == null ? NaN : parseInt(indexStr, 10);
+            const isSelected = Number.isFinite(dataIndex) && selected.has(dataIndex);
+            el.attr("aria-pressed", isSelected ? "true" : "false")
+                .classed("is-selected", isSelected);
+
+            if (isSelected) {
+                el.attr("stroke", focusColor).attr("stroke-width", "2.5");
+            } else {
+                visual.restoreOriginalStroke(el);
+            }
+        });
+    }
+
+    private addCommentInteractivity(comparisonType: ComparisonType): void {
+        const self = this;
+        this.chartContainer.selectAll<Element, unknown>(".comment-marker, .comment-card-marker")
+            .each(function() {
+                const el = d3.select(this);
+                const indexStr = el.attr("data-comment-index");
+                const dataIndex = indexStr == null ? NaN : parseInt(indexStr, 10);
+                const dp = Number.isFinite(dataIndex) ? self.getDataPointByIndex(dataIndex) : undefined;
+                if (!dp) return;
+
+                el.attr("tabindex", "0")
+                    .attr("role", "button")
+                    .attr("aria-label", `Comment for ${dp.category}: ${dp.comment || "No comment"}`)
+                    .style("cursor", "pointer")
+                    .on("click", function(event: MouseEvent) {
+                        event.stopPropagation();
+                        self.selectDataPoint(dataIndex, event.ctrlKey || event.metaKey);
+                    })
+                    .on("keydown", function(event: KeyboardEvent) {
+                        if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            self.selectDataPoint(dataIndex, event.ctrlKey || event.metaKey);
+                        } else if (event.key === "Escape") {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            self.clearSelectionAndFilters();
+                        } else if (event.key === "ContextMenu" || event.key === "Apps" || (event.shiftKey && event.key === "F10")) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            const [x, y] = self.getElementCenter(this as Element);
+                            self.showContextMenuForDataIndex(dataIndex, x, y);
+                        } else if (event.key === "F2") {
+                            event.preventDefault();
+                            self.showTooltipForDataIndex(dataIndex, comparisonType, self.getElementCenter(this as Element));
+                        }
+                    })
+                    .on("focus", function() {
+                        self.highlightComment(dataIndex);
+                    });
+            });
     }
 
     private syncSelectionState(selectionIds: ISelectionId[]): void {
         const hasSelection = selectionIds.length > 0;
-        this.chartContainer.selectAll("rect[data-index], circle[data-index]").each(function() {
+        this.getDataMarksSelection().each(function() {
             const el = d3.select(this);
             el.style("opacity", hasSelection ? "0.3" : "1");
         });
@@ -588,7 +819,6 @@ export class Visual implements IVisual {
             .style("opacity", "1");
         // If we have selections, make matching elements opaque
         if (hasSelection) {
-            const dataPointCount = this.parsedData?.dataPoints.length || 1;
             const selectedDpIndices = new Set<number>();
 
             // Build key set from incoming selection IDs for fast lookup
@@ -625,27 +855,25 @@ export class Visual implements IVisual {
                 if (matched) selectedDpIndices.add(i);
             }
 
-            this.chartContainer.selectAll("rect[data-index], circle[data-index]").each(function() {
+            this.selectedDataPointIndices = selectedDpIndices;
+
+            this.getDataMarksSelection().each(function() {
                 const el = d3.select(this);
                 const indexStr = el.attr("data-index");
                 if (indexStr != null) {
-                    const dpIndex = parseInt(indexStr);
+                    const dpIndex = parseInt(indexStr, 10);
                     if (selectedDpIndices.has(dpIndex)) {
                         el.style("opacity", "1");
-                        // Add selection indicator stroke for rect elements
-                        if ((el.node() as Element)?.tagName === "rect") {
-                            el.attr("stroke", "#333").attr("stroke-width", "1.5");
-                        }
                     }
                 }
             });
+            this.updateDataMarkSelectionAttributes();
 
             // Show clear-selection button
             this.renderClearSelectionButton();
         } else {
-            // Remove selection strokes and clear button
-            this.chartContainer.selectAll("rect[data-index]")
-                .attr("stroke", null).attr("stroke-width", null);
+            this.selectedDataPointIndices.clear();
+            this.updateDataMarkSelectionAttributes();
             this.svg.selectAll(".clear-selection-btn").remove();
         }
     }
@@ -656,25 +884,29 @@ export class Visual implements IVisual {
         const btn = this.svg.append("g")
             .attr("class", "clear-selection-btn")
             .attr("transform", "translate(8, 8)")
+            .attr("tabindex", "0")
+            .attr("role", "button")
+            .attr("aria-label", "Clear selection")
+            .attr("focusable", "true")
             .style("cursor", "pointer")
             .on("click", function(event: MouseEvent) {
                 event.stopPropagation();
-                self.selectionManager.clear().then(() => {
-                    self.syncSelectionState([]);
-                });
-                self.highlightComment(-1);
-                const crossFilterMode = String(self.formattingSettings.interactionCard.crossFilterMode.value.value);
-                if (crossFilterMode === "filter") {
-                    self.clearCrossFilter();
+                self.clearSelectionAndFilters();
+            })
+            .on("keydown", function(event: KeyboardEvent) {
+                if (event.key === "Enter" || event.key === " " || event.key === "Spacebar" || event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    self.clearSelectionAndFilters();
                 }
             });
         btn.append("rect")
             .attr("width", 20).attr("height", 20).attr("rx", 3)
-            .attr("fill", "#f5f5f5").attr("stroke", "#ccc");
+            .attr("fill", this.getBackgroundColor()).attr("stroke", this.getFocusColor());
         btn.append("text")
             .attr("x", 10).attr("y", 14)
             .attr("text-anchor", "middle")
-            .attr("font-size", "13px").attr("fill", "#666")
+            .attr("font-size", "13px").attr("fill", this.getForegroundColor())
             .text("×");
     }
 
@@ -683,6 +915,8 @@ export class Visual implements IVisual {
      * Pass -1 to clear all highlights.
      */
     private highlightComment(dataPointIndex: number): void {
+        const commentHighlightFill = this.isHighContrast ? this.getBackgroundColor() : "rgba(26, 115, 232, 0.15)";
+
         // Reset all comment markers and cards to default
         this.chartContainer.selectAll(".comment-marker")
             .attr("stroke-width", 1.5)
@@ -696,12 +930,12 @@ export class Visual implements IVisual {
         // Highlight matching comment markers on chart
         this.chartContainer.selectAll(`.comment-marker[data-comment-index="${dataPointIndex}"]`)
             .attr("stroke-width", 3)
-            .attr("fill", "rgba(26, 115, 232, 0.15)");
+            .attr("fill", commentHighlightFill);
 
         // Highlight matching comment card markers
         this.chartContainer.selectAll(`.comment-card-marker[data-comment-index="${dataPointIndex}"]`)
             .attr("stroke-width", 3)
-            .attr("fill", "rgba(26, 115, 232, 0.15)");
+            .attr("fill", commentHighlightFill);
     }
 
     // ─── Cross-Filter ───
@@ -709,11 +943,11 @@ export class Visual implements IVisual {
     /** Track selected category values for multi-select cross-filtering */
     private crossFilterValues: Set<string> = new Set();
 
-    private applyCrossFilter(dpIndex: number, isMultiSelect: boolean): void {
+    private applyCrossFilter(dataIndex: number, isMultiSelect: boolean): void {
         const category = this.dataView?.categorical?.categories?.[0];
         if (!category?.source) return;
 
-        const dp = this.parsedData?.dataPoints[dpIndex];
+        const dp = this.getDataPointByIndex(dataIndex);
         if (!dp) return;
 
         if (!isMultiSelect) {
@@ -801,41 +1035,80 @@ export class Visual implements IVisual {
         const drillUpGroup = this.chartContainer.append("g")
             .attr("class", "drill-up-button")
             .attr("transform", "translate(0, -10)")
+            .attr("tabindex", "0")
+            .attr("role", "button")
+            .attr("aria-label", "Drill up")
+            .attr("focusable", "true")
             .style("cursor", "pointer")
             .on("click", function() {
                 self.triggerDrill(1 /* DrillType.Up */);
+            })
+            .on("keydown", function(event: KeyboardEvent) {
+                if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    self.triggerDrill(1 /* DrillType.Up */);
+                } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    self.clearSelectionAndFilters();
+                }
             });
 
         drillUpGroup.append("text")
             .attr("x", 0)
             .attr("y", 0)
             .attr("font-size", "11px")
-            .attr("fill", "#1a73e8")
+            .attr("fill", this.getHyperlinkColor())
             .text("↑ Drill Up");
     }
 
     private buildTooltipForDataPoint(dp: DataPoint, comparisonType: ComparisonType): VisualTooltipDataItem[] {
+        const actualHighlight = this.getHighlightValueForRole(dp.index, "actual");
+        const actualForTooltip = actualHighlight ?? dp.actual;
         const tooltipItems: VisualTooltipDataItem[] = [
             { displayName: "Category", value: dp.category },
-            { displayName: "Actual", value: formatNumber(dp.actual, { scale: "auto" }) }
+            { displayName: "Actual", value: formatNumber(actualForTooltip, { scale: "auto" }) }
         ];
 
+        if (actualHighlight != null && actualHighlight !== dp.actual) {
+            tooltipItems.push({ displayName: "Total Actual", value: formatNumber(dp.actual, { scale: "auto" }) });
+        }
+
         if (this.parsedData?.hasBudget) {
+            const budgetHighlight = this.getHighlightValueForRole(dp.index, "budget");
+            const budgetForTooltip = budgetHighlight ?? dp.budget;
+            const varianceToBudget = actualForTooltip - budgetForTooltip;
+            const varianceToBudgetPct = this.calculateTooltipPercentage(varianceToBudget, budgetForTooltip);
             tooltipItems.push(
-                { displayName: "Budget", value: formatNumber(dp.budget, { scale: "auto" }) },
-                { displayName: "Variance to Budget", value: `${dp.varianceToBudget >= 0 ? "+" : ""}${formatNumber(dp.varianceToBudget, { scale: "auto" })} (${dp.varianceToBudgetPct.toFixed(1)}%)` }
+                { displayName: "Budget", value: formatNumber(budgetForTooltip, { scale: "auto" }) },
+                { displayName: "Variance to Budget", value: `${varianceToBudget >= 0 ? "+" : ""}${formatNumber(varianceToBudget, { scale: "auto" })} (${formatPercent(varianceToBudgetPct, 1, false)})` }
             );
+            if (budgetHighlight != null && budgetHighlight !== dp.budget) {
+                tooltipItems.push({ displayName: "Total Budget", value: formatNumber(dp.budget, { scale: "auto" }) });
+            }
         }
         if (this.parsedData?.hasPreviousYear) {
+            const pyHighlight = this.getHighlightValueForRole(dp.index, "previousYear");
+            const pyForTooltip = pyHighlight ?? dp.previousYear;
+            const varianceToPy = actualForTooltip - pyForTooltip;
+            const varianceToPyPct = this.calculateTooltipPercentage(varianceToPy, pyForTooltip);
             tooltipItems.push(
-                { displayName: "Previous Year", value: formatNumber(dp.previousYear, { scale: "auto" }) },
-                { displayName: "YoY Change", value: `${dp.varianceToPY >= 0 ? "+" : ""}${formatNumber(dp.varianceToPY, { scale: "auto" })} (${dp.varianceToPYPct.toFixed(1)}%)` }
+                { displayName: "Previous Year", value: formatNumber(pyForTooltip, { scale: "auto" }) },
+                { displayName: "YoY Change", value: `${varianceToPy >= 0 ? "+" : ""}${formatNumber(varianceToPy, { scale: "auto" })} (${formatPercent(varianceToPyPct, 1, false)})` }
             );
+            if (pyHighlight != null && pyHighlight !== dp.previousYear) {
+                tooltipItems.push({ displayName: "Total Previous Year", value: formatNumber(dp.previousYear, { scale: "auto" }) });
+            }
         }
         if (this.parsedData?.hasForecast) {
+            const forecastHighlight = this.getHighlightValueForRole(dp.index, "forecast");
             tooltipItems.push(
-                { displayName: "Forecast", value: formatNumber(dp.forecast, { scale: "auto" }) }
+                { displayName: "Forecast", value: formatNumber(forecastHighlight ?? dp.forecast, { scale: "auto" }) }
             );
+            if (forecastHighlight != null && forecastHighlight !== dp.forecast) {
+                tooltipItems.push({ displayName: "Total Forecast", value: formatNumber(dp.forecast, { scale: "auto" }) });
+            }
         }
         if (dp.tooltipFields && dp.tooltipFields.length > 0) {
             tooltipItems.push(...dp.tooltipFields.map((field) => ({
@@ -848,6 +1121,18 @@ export class Visual implements IVisual {
         }
 
         return tooltipItems;
+    }
+
+    private getHighlightValueForRole(dataIndex: number, roleName: string): number | null {
+        const column = this.dataView?.categorical?.values?.find(valueColumn => valueColumn.source.roles?.[roleName]);
+        const highlighted = column?.highlights?.[dataIndex];
+        if (highlighted == null) return null;
+        const numeric = Number(highlighted);
+        return Number.isFinite(numeric) ? numeric : null;
+    }
+
+    private calculateTooltipPercentage(variance: number, base: number): number {
+        return base === 0 ? NaN : (variance / Math.abs(base)) * 100;
     }
 
     private hasComparisonData(data: ParsedData, comparisonType: ComparisonType): boolean {
@@ -980,7 +1265,7 @@ export class Visual implements IVisual {
                     .attr("text-anchor", "middle")
                     .attr("font-size", "11px")
                     .attr("font-weight", "bold")
-                    .attr("fill", "#333")
+                    .attr("fill", chartSettings.fontColor)
                     .text(group);
             }
 
@@ -1005,6 +1290,7 @@ export class Visual implements IVisual {
 
             const chart = createChart(chartType, chartGroup, groupData, cellSettings, cellDimensions);
             chart.render();
+            this.remapSmallMultipleDataMarks(chartGroup, groupData);
         });
 
         // Render outer-level title
@@ -1067,7 +1353,7 @@ export class Visual implements IVisual {
                 legendGroup.append("text")
                     .attr("x", ix + 18).attr("y", iy + 10)
                     .attr("font-size", `${chartSettings.legend.fontSize}px`)
-                    .attr("fill", "#333")
+                    .attr("fill", chartSettings.fontColor)
                     .text(item.label);
             });
         }
@@ -1075,7 +1361,7 @@ export class Visual implements IVisual {
         // Render outer-level comment box
         if (chartSettings.commentBox.show && this.parsedData.hasComments) {
             const comments = this.parsedData.dataPoints
-                .map((d, i) => ({ dp: d, index: i }))
+                .map((d) => ({ dp: d, index: d.index }))
                 .filter(({ dp }) => dp.comment && dp.comment.trim() !== "");
 
             if (comments.length > 0) {
@@ -1164,7 +1450,7 @@ export class Visual implements IVisual {
 
                     const valueLine = content.append("xhtml:div")
                         .style("font-size", `${fontSize}px`)
-                        .style("color", "#333")
+                        .style("color", cbSettings.fontColor)
                         .style("line-height", "1.4");
 
                     valueLine.append("xhtml:span").text(valueText);
@@ -1189,7 +1475,7 @@ export class Visual implements IVisual {
                     if (dp.comment) {
                         content.append("xhtml:div")
                             .style("font-size", `${fontSize - 1}px`)
-                            .style("color", "#666")
+                            .style("color", cbSettings.fontColor)
                             .style("line-height", "1.4")
                             .style("word-wrap", "break-word")
                             .text(dp.comment.trim());
@@ -1199,6 +1485,20 @@ export class Visual implements IVisual {
         }
 
         if (enableTelemetry) console.groupEnd();
+    }
+
+    private remapSmallMultipleDataMarks(
+        chartGroup: d3.Selection<SVGGElement, unknown, null, undefined>,
+        groupData: ParsedData
+    ): void {
+        chartGroup.selectAll<Element, unknown>("[data-dp-index]").each(function() {
+            const el = d3.select(this);
+            const localIndex = parseInt(el.attr("data-dp-index") ?? "", 10);
+            const dataIndex = Number.isFinite(localIndex) ? groupData.dataPoints[localIndex]?.index : undefined;
+            if (dataIndex != null) {
+                el.attr("data-selection-index", String(dataIndex));
+            }
+        });
     }
 
     private buildLegendItems(chartType: ChartType, settings: ChartSettings): Array<{ label: string; color: string; outlined?: boolean }> {
@@ -1221,6 +1521,38 @@ export class Visual implements IVisual {
         ];
     }
 
+    private readPaletteColor(colorInfo: any, fallback: string): string {
+        if (typeof colorInfo === "string") return colorInfo;
+        return colorInfo?.value
+            ?? colorInfo?.solid?.color
+            ?? colorInfo?.solid?.color?.value
+            ?? fallback;
+    }
+
+    private getForegroundColor(): string {
+        return this.isHighContrast && this.highContrastColors
+            ? this.highContrastColors.foreground
+            : "#333333";
+    }
+
+    private getBackgroundColor(): string {
+        return this.isHighContrast && this.highContrastColors
+            ? this.highContrastColors.background
+            : "#ffffff";
+    }
+
+    private getFocusColor(): string {
+        return this.isHighContrast && this.highContrastColors
+            ? this.highContrastColors.foregroundSelected
+            : "#0078d4";
+    }
+
+    private getHyperlinkColor(): string {
+        return this.isHighContrast && this.highContrastColors
+            ? this.highContrastColors.hyperlink
+            : "#1a73e8";
+    }
+
     private getColors(): IBCSColors {
         // Use high contrast colors if enabled
         if (this.isHighContrast && this.highContrastColors) {
@@ -1232,6 +1564,10 @@ export class Visual implements IVisual {
                 positiveVariance: this.highContrastColors.foreground,
                 negativeVariance: this.highContrastColors.foreground
             };
+        }
+
+        if (!this.formattingSettings) {
+            return { ...DEFAULT_IBCS_COLORS };
         }
 
         const colors = this.formattingSettings.ibcsColorsCard;
@@ -1253,24 +1589,25 @@ export class Visual implements IVisual {
         this.chartContainer.append("rect")
             .attr("width", width)
             .attr("height", height)
-            .attr("fill", this.isHighContrast ? this.highContrastColors?.background || "#fff" : "#fafafa");
+            .attr("fill", this.isHighContrast ? this.getBackgroundColor() : "#fafafa");
 
         // Icon representation
         const iconGroup = this.chartContainer.append("g")
             .attr("transform", `translate(${width/2 - 40}, ${height/2 - 50})`);
 
         // Mini chart icon
-        iconGroup.append("rect").attr("x", 0).attr("y", 40).attr("width", 15).attr("height", 30).attr("fill", "#ccc");
-        iconGroup.append("rect").attr("x", 20).attr("y", 20).attr("width", 15).attr("height", 50).attr("fill", "#404040");
-        iconGroup.append("rect").attr("x", 40).attr("y", 50).attr("width", 15).attr("height", 20).attr("fill", "#4CAF50");
-        iconGroup.append("rect").attr("x", 60).attr("y", 30).attr("width", 15).attr("height", 40).attr("fill", "#ccc");
+        const colors = this.getColors();
+        iconGroup.append("rect").attr("x", 0).attr("y", 40).attr("width", 15).attr("height", 30).attr("fill", colors.budget);
+        iconGroup.append("rect").attr("x", 20).attr("y", 20).attr("width", 15).attr("height", 50).attr("fill", colors.actual);
+        iconGroup.append("rect").attr("x", 40).attr("y", 50).attr("width", 15).attr("height", 20).attr("fill", colors.positiveVariance);
+        iconGroup.append("rect").attr("x", 60).attr("y", 30).attr("width", 15).attr("height", 40).attr("fill", colors.budget);
 
         // Title
         this.chartContainer.append("text")
             .attr("x", width / 2)
             .attr("y", height / 2 + 30)
             .attr("text-anchor", "middle")
-            .attr("fill", this.isHighContrast ? this.highContrastColors?.foreground || "#333" : "#333")
+            .attr("fill", this.isHighContrast ? this.getForegroundColor() : "#333")
             .attr("font-size", "14px")
             .attr("font-weight", "bold")
             .text("Atlyn Variance Chart");
@@ -1280,7 +1617,7 @@ export class Visual implements IVisual {
             .attr("x", width / 2)
             .attr("y", height / 2 + 50)
             .attr("text-anchor", "middle")
-            .attr("fill", this.isHighContrast ? this.highContrastColors?.foreground || "#666" : "#666")
+            .attr("fill", this.isHighContrast ? this.getForegroundColor() : "#666")
             .attr("font-size", "11px")
             .text("Add Category, Actual, and Budget fields to start");
 
@@ -1289,7 +1626,7 @@ export class Visual implements IVisual {
             .attr("x", width / 2)
             .attr("y", height / 2 + 68)
             .attr("text-anchor", "middle")
-            .attr("fill", this.isHighContrast ? this.highContrastColors?.foreground || "#888" : "#888")
+            .attr("fill", this.isHighContrast ? this.getForegroundColor() : "#888")
             .attr("font-size", "10px")
             .text("Use Format pane to switch chart types");
     }
@@ -1302,7 +1639,7 @@ export class Visual implements IVisual {
             .attr("x", width / 2)
             .attr("y", height / 2)
             .attr("text-anchor", "middle")
-            .attr("fill", this.isHighContrast ? this.highContrastColors?.foreground || "#666" : "#666")
+            .attr("fill", this.isHighContrast ? this.getForegroundColor() : "#666")
             .attr("font-size", "12px")
             .text(message);
     }

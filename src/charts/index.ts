@@ -88,6 +88,6 @@ export function createChart(
             return new LollipopChart(container, data, settings, dimensions);
         
         default:
-            return new VarianceChart(container, data, settings, dimensions);
+            throw new Error(`Unknown chart type: ${chartType}`);
     }
 }

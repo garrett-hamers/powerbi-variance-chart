@@ -85,7 +85,8 @@ export class DotChart extends BaseChart {
             }
 
             // Actual dot (filled, sized by variance magnitude)
-            const absVariancePct = Math.abs(this.getVariancePctForPoint(d));
+            const rawPct = this.getVariancePctForPoint(d);
+            const absVariancePct = Number.isFinite(rawPct) ? Math.abs(rawPct) : 0;
             const dotRadius = Math.min(12, Math.max(5, 5 + absVariancePct / 10));
 
             this.container.append("circle")

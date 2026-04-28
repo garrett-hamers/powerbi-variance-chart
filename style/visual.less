@@ -20,10 +20,24 @@
                 transform: translateY(-1px);
             }
             
-            &:focus {
+        }
+
+        rect[data-index],
+        circle[data-index],
+        .clear-selection-btn,
+        .drill-up-button,
+        .comment-marker,
+        .comment-card-marker {
+            &:focus,
+            &:focus-visible {
                 outline: 2px solid #0078d4;
                 outline-offset: 2px;
             }
+        }
+
+        rect[data-index].is-selected,
+        circle[data-index].is-selected {
+            filter: drop-shadow(0 0 2px #0078d4);
         }
 
         circle {
@@ -34,10 +48,6 @@
                 opacity: 0.85;
             }
             
-            &:focus {
-                outline: 2px solid #0078d4;
-                outline-offset: 2px;
-            }
         }
 
         line {
@@ -94,11 +104,29 @@
 }
 
 // High contrast mode overrides
-@media screen and (-ms-high-contrast: active) {
+@media screen and (-ms-high-contrast: active), (forced-colors: active) {
     .varianceChart {
         rect, circle {
             stroke: currentColor;
             stroke-width: 1px;
+        }
+
+        rect[data-index],
+        circle[data-index],
+        .clear-selection-btn,
+        .drill-up-button,
+        .comment-marker,
+        .comment-card-marker {
+            &:focus,
+            &:focus-visible {
+                outline: 2px solid Highlight;
+            }
+        }
+
+        rect[data-index].is-selected,
+        circle[data-index].is-selected {
+            filter: none;
+            stroke: Highlight;
         }
         
         text {

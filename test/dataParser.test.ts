@@ -54,14 +54,14 @@ describe("parseDataView", () => {
         expect(result.dataPoints[0].varianceToFCPct).toBe(-25); // -50/200 * 100
     });
 
-    it("handles zero base value for percentage (no divide by zero)", () => {
+    it("handles zero base value for percentage (returns NaN sentinel)", () => {
         const dv = buildMockDataView({
             categories: ["Q1"],
             actual: [50],
             budget: [0]
         });
         const result = parseDataView(dv)!;
-        expect(result.dataPoints[0].varianceToBudgetPct).toBe(0);
+        expect(Number.isNaN(result.dataPoints[0].varianceToBudgetPct)).toBe(true);
     });
 
     it("parses groups and sets hasGroups", () => {
@@ -302,5 +302,29 @@ describe("applyTopN", () => {
         // Cat2: actual=200, budget=180 → variance=20
         // Others: actual=300, budget=270 → variance=30
         expect(others.varianceToBudget).toBe(others.actual - others.budget);
+    });
+});
+
+// ── createChart factory ──
+describe("createChart factory", () => {
+    it("throws for unknown chart type", async () => {
+        const { createChart } = await import("../src/charts");
+        expect(() => createChart("unknown" as any, null as any, null as any, null as any, null as any)).toThrow(/Unknown chart type/);
+    });
+});
+
+// ── formatPercent ──
+describe("formatPercent", () => {
+    it("renders em-dash for NaN", async () => {
+        const { formatPercent } = await import("../src/utils/formatting");
+        expect(formatPercent(NaN)).toBe("—");
+    });
+    it("renders em-dash for Infinity", async () => {
+        const { formatPercent } = await import("../src/utils/formatting");
+        expect(formatPercent(Infinity)).toBe("—");
+    });
+    it("renders normal percentage with sign", async () => {
+        const { formatPercent } = await import("../src/utils/formatting");
+        expect(formatPercent(12.345, 1, true)).toBe("+12.3%");
     });
 });

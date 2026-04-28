@@ -84,6 +84,7 @@ export function formatNumber(value: number, options: Partial<FormatOptions> = {}
  * Format a percentage value
  */
 export function formatPercent(value: number, decimals: number = 1, showSign: boolean = true): string {
+    if (!Number.isFinite(value)) return "—";
     const sign = showSign && value > 0 ? "+" : "";
     return `${sign}${value.toFixed(decimals)}%`;
 }

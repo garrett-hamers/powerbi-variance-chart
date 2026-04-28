@@ -1,20 +1,23 @@
 {
-  "name": "visual",
-  "description": "default_template_value",
-  "version": "1.0.0.0",
+  "name": "atlyn-variance-chart",
+  "description": "Free, IBCS-compliant variance analysis visual for Power BI by Atlyn.",
+  "version": "1.7.0.0",
   "repository": {
-    "type": "default_template_value",
-    "url": "default_template_value"
+    "type": "git",
+    "url": "https://github.com/garrett-hamers/powerbi-variance-chart.git"
   },
   "license": "MIT",
   "scripts": {
     "pbiviz": "pbiviz",
     "start": "pbiviz start",
-    "package": "pbiviz package && powershell -Command \"Get-ChildItem dist/*.pbiviz | Rename-Item -NewName atlynVarianceChart.pbiviz -Force\"",
+    "package": "pbiviz package && powershell -NoProfile -Command \"Remove-Item 'dist/atlynVarianceChart.pbiviz' -ErrorAction SilentlyContinue; Get-ChildItem 'dist/*.pbiviz' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Rename-Item -NewName 'atlynVarianceChart.pbiviz' -Force\"",
     "lint": "npx eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "preview:build": "npx esbuild ./e2e/visual-harness-entry.ts --bundle --outfile=./e2e/visual-harness-bundle.js --format=iife --target=es2020 --loader:.less=empty",
+    "preview": "npm run preview:build && npx playwright test --config playwright.config.ts",
+    "matrix": "node scripts/capabilities-matrix.mjs"
   },
   "dependencies": {
     "d3": "^7.9.0",
@@ -23,8 +26,10 @@
     "powerbi-visuals-utils-formattingmodel": "6.0.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/d3": "^7.4.3",
     "@typescript-eslint/eslint-plugin": "^8.8.0",
+    "esbuild": "^0.28.0",
     "eslint": "^9.11.1",
     "eslint-plugin-powerbi-visuals": "^1.0.0",
     "happy-dom": "^20.5.0",

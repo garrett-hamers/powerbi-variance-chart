@@ -121,7 +121,7 @@ export class WaterfallChart extends BaseChart {
             .attr("x2", this.chartWidth)
             .attr("y1", yScale(0))
             .attr("y2", yScale(0))
-            .attr("stroke", "#999")
+            .attr("stroke", this.settings.fontColor)
             .attr("stroke-dasharray", "3,3");
 
         // Draw waterfall bars
@@ -165,7 +165,7 @@ export class WaterfallChart extends BaseChart {
                     .attr("x2", nextX)
                     .attr("y1", connectorY)
                     .attr("y2", connectorY)
-                    .attr("stroke", "#999")
+                    .attr("stroke", this.settings.fontColor)
                     .attr("stroke-width", 1)
                     .attr("stroke-dasharray", "2,2");
             }
@@ -181,9 +181,11 @@ export class WaterfallChart extends BaseChart {
                 let labelText: string;
                 if (d.isTotal) {
                     labelText = this.formatValue(d.value);
-                } else if (showPercentage && d.variancePct !== undefined) {
+                } else if (showPercentage && d.variancePct !== undefined && Number.isFinite(d.variancePct)) {
                     const sign = d.variancePct >= 0 ? "+" : "";
                     labelText = `${sign}${d.variancePct.toFixed(1)}%`;
+                } else if (showPercentage && d.variancePct !== undefined) {
+                    labelText = "—";
                 } else {
                     const displayVariance = d.variance ?? d.value;
                     const sign = displayVariance >= 0 ? "+" : "";

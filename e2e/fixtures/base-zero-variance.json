@@ -1,0 +1,104 @@
+{
+  "metadata": {
+    "columns": [
+      {
+        "displayName": "Line Item",
+        "queryName": "Table.LineItem",
+        "type": {
+          "text": true
+        },
+        "roles": {
+          "category": true
+        }
+      },
+      {
+        "displayName": "Actual",
+        "queryName": "Sum(Actual)",
+        "type": {
+          "numeric": true
+        },
+        "format": "$#,0",
+        "roles": {
+          "actual": true
+        },
+        "isMeasure": true
+      },
+      {
+        "displayName": "Budget",
+        "queryName": "Sum(Budget)",
+        "type": {
+          "numeric": true
+        },
+        "format": "$#,0",
+        "roles": {
+          "budget": true
+        },
+        "isMeasure": true
+      }
+    ]
+  },
+  "categorical": {
+    "categories": [
+      {
+        "source": {
+          "displayName": "Line Item",
+          "queryName": "Table.LineItem",
+          "type": {
+            "text": true
+          },
+          "roles": {
+            "category": true
+          }
+        },
+        "values": [
+          "New Product Line",
+          "Core Product",
+          "Legacy Product",
+          "Discontinued"
+        ]
+      }
+    ],
+    "values": [
+      {
+        "source": {
+          "displayName": "Actual",
+          "queryName": "Sum(Actual)",
+          "type": {
+            "numeric": true
+          },
+          "format": "$#,0",
+          "roles": {
+            "actual": true
+          },
+          "isMeasure": true
+        },
+        "values": [
+          450000,
+          1200000,
+          300000,
+          0
+        ]
+      },
+      {
+        "source": {
+          "displayName": "Budget",
+          "queryName": "Sum(Budget)",
+          "type": {
+            "numeric": true
+          },
+          "format": "$#,0",
+          "roles": {
+            "budget": true
+          },
+          "isMeasure": true
+        },
+        "values": [
+          0,
+          1100000,
+          350000,
+          50000
+        ]
+      }
+    ]
+  }
+}

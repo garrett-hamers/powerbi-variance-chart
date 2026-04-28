@@ -71,7 +71,7 @@ export class LollipopChart extends BaseChart {
             .attr("x2", xScale(0))
             .attr("y1", 0)
             .attr("y2", this.chartHeight)
-            .attr("stroke", "#666")
+            .attr("stroke", this.settings.fontColor)
             .attr("stroke-width", 1);
 
         const showLabels = this.settings.dataLabels?.show ?? this.settings.showVarianceLabels;

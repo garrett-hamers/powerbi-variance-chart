@@ -1,0 +1,164 @@
+{
+  "metadata": {
+    "columns": [
+      {
+        "displayName": "Quarter",
+        "queryName": "Table.Quarter",
+        "type": {
+          "text": true
+        },
+        "roles": {
+          "category": true
+        }
+      },
+      {
+        "displayName": "Region",
+        "queryName": "Table.Region",
+        "type": {
+          "text": true
+        },
+        "roles": {
+          "group": true
+        }
+      },
+      {
+        "displayName": "Actual",
+        "queryName": "Sum(Actual)",
+        "type": {
+          "numeric": true
+        },
+        "format": "$#,0",
+        "roles": {
+          "actual": true
+        },
+        "isMeasure": true
+      },
+      {
+        "displayName": "Budget",
+        "queryName": "Sum(Budget)",
+        "type": {
+          "numeric": true
+        },
+        "format": "$#,0",
+        "roles": {
+          "budget": true
+        },
+        "isMeasure": true
+      }
+    ]
+  },
+  "categorical": {
+    "categories": [
+      {
+        "source": {
+          "displayName": "Quarter",
+          "queryName": "Table.Quarter",
+          "type": {
+            "text": true
+          },
+          "roles": {
+            "category": true
+          }
+        },
+        "values": [
+          "Q1",
+          "Q2",
+          "Q3",
+          "Q4",
+          "Q1",
+          "Q2",
+          "Q3",
+          "Q4",
+          "Q1",
+          "Q2",
+          "Q3",
+          "Q4"
+        ]
+      },
+      {
+        "source": {
+          "displayName": "Region",
+          "queryName": "Table.Region",
+          "type": {
+            "text": true
+          },
+          "roles": {
+            "group": true
+          }
+        },
+        "values": [
+          "North",
+          "North",
+          "North",
+          "North",
+          "South",
+          "South",
+          "South",
+          "South",
+          "West",
+          "West",
+          "West",
+          "West"
+        ]
+      }
+    ],
+    "values": [
+      {
+        "source": {
+          "displayName": "Actual",
+          "queryName": "Sum(Actual)",
+          "type": {
+            "numeric": true
+          },
+          "format": "$#,0",
+          "roles": {
+            "actual": true
+          },
+          "isMeasure": true
+        },
+        "values": [
+          420,
+          510,
+          580,
+          640,
+          380,
+          460,
+          530,
+          610,
+          360,
+          430,
+          480,
+          570
+        ]
+      },
+      {
+        "source": {
+          "displayName": "Budget",
+          "queryName": "Sum(Budget)",
+          "type": {
+            "numeric": true
+          },
+          "format": "$#,0",
+          "roles": {
+            "budget": true
+          },
+          "isMeasure": true
+        },
+        "values": [
+          400,
+          500,
+          600,
+          650,
+          400,
+          480,
+          550,
+          620,
+          380,
+          440,
+          500,
+          580
+        ]
+      }
+    ]
+  }
+}
