@@ -2,10 +2,10 @@
 
 A free, open-source Power BI custom visual for IBCS-compliant variance analysis. Built as an alternative to ZebraBI with 10 chart types, small multiples, interactive comments, cross-filtering, and drill-down support.
 
-![Power BI](https://img.shields.io/badge/Power_BI-API_5.3-yellow)
+![Power BI](https://img.shields.io/badge/Power_BI-API_5.11.1-yellow)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Tests](https://img.shields.io/badge/Tests-154_passing-brightgreen)
-![Version](https://img.shields.io/badge/Version-1.7.0-blue)
+![Tests](https://img.shields.io/badge/Tests-285_passing-brightgreen)
+![Version](https://img.shields.io/badge/Version-1.8.1.0-blue)
 
 ---
 
@@ -80,7 +80,7 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
 
 | Card | Options |
 |------|---------|
-| **Chart Settings** | Chart type, comparison mode (vs Plan / vs PY / vs Forecast), orientation, invert variance |
+| **Chart Settings** | Chart type, comparison mode (vs Plan / vs PY / vs Forecast), invert variance |
 | **Title** | Show/hide, text, font size, color, alignment |
 | **Data Labels** | Values, variance, percentage, font size, decimal places, display units, negative format, label density |
 | **Categories** | Show/hide axis, font size, color, rotation, max width |
@@ -88,7 +88,7 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
 | **Comments** | Show/hide, variance display, variance icon style, padding, gap, font, marker size/color |
 | **Design** | Colors for actual, plan, previous year, forecast, positive/negative variance |
 | **Difference Highlighting** | Enable/disable, threshold, highlight positive/negative |
-| **Axis Break** | Enable/disable, break value |
+| **Axis Break Marker** | Show/hide a non-destructive marker on the continuous scale, marker value |
 | **Top N + Others** | Enable, count, sort by/direction, show Others, Others label |
 | **Small Multiples** | Grid columns, spacing, show headers, scale mode |
 | **Responsive Design** | Enable, minimum chart width |
@@ -99,7 +99,7 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
 ## Installation
 
 ### From Package
-1. Download `atlynVarianceChart.pbiviz` from the [`dist/`](dist/) folder
+1. Download a published `.pbiviz`, or run `npm run package` and use the generated file in `dist/`
 2. In Power BI Desktop → **File → Import → Power BI Visual**
 3. Select the downloaded file
 
@@ -115,7 +115,9 @@ npm start
 # Run tests
 npm test
 
-# Package for distribution
+# Run certification lint/audit and package for distribution
+npm run eslint
+npm audit
 npm run package
 ```
 
@@ -123,13 +125,14 @@ npm run package
 
 ## Testing
 
-154 automated tests across 3 test files:
+285 automated tests across four test files:
 
-| Suite | Tests | Coverage |
-|-------|-------|----------|
-| Layout Engine | 50 | Margins, chart area, comment box, legend, small multiples viewport |
-| Data Parser | 25 | Parsing, variance calculation, Top N, edge cases |
-| Chart Rendering | 79 | All chart types, comments, variance icons, cross-filter logic, grouped rendering |
+| Suite | Coverage |
+|-------|----------|
+| Layout Engine | Margins, chart area, comments, legends, small multiples, and tiny viewports |
+| Data Parser | Model formats, variance math, grouped Top N, null/nonfinite/extreme values |
+| Chart Rendering | All ten chart types, signs, labels, shared scales, waterfall reconciliation, high contrast |
+| Visual Integration | Rendering events, identities, filters, context menus, keyboard/ARIA, themes, resize/scroll |
 
 ```bash
 npm test
@@ -139,7 +142,8 @@ npm test
 
 ## Tech Stack
 
-- **Power BI Visuals API** 5.3.0
+- **Power BI Visuals API** 5.11.1
+- **Power BI Visuals Tools** 7.2.0
 - **D3.js** for SVG rendering
 - **TypeScript** with strict mode
 - **Vitest** + happy-dom for testing
@@ -149,7 +153,7 @@ npm test
 
 ## License
 
-MIT License — free for personal and commercial use.
+[MIT License](LICENSE) — free for personal and commercial use.
 
 ---
 

@@ -3,7 +3,7 @@
  */
 import * as d3 from "d3";
 import { BaseChart, ChartSettings, ChartDimensions } from "./baseChart";
-import { ParsedData } from "../dataParser";
+import { ParsedData, FiniteValue } from "../dataParser";
 
 export class VarianceChart extends BaseChart {
     constructor(
@@ -17,144 +17,132 @@ export class VarianceChart extends BaseChart {
 
     render(): void {
         if (this.chartWidth <= 0 || this.chartHeight <= 0) return;
-
         this.createPatternDefs();
-
         const { dataPoints } = this.data;
-        const margin = this.dimensions.margin;
-
-        this.container.attr("transform", `translate(${margin.left},${margin.top})`);
-
-        // Render title
+        const comparisonPresentation = this.getComparisonPresentation();
+        this.container.attr("transform", `translate(${this.dimensions.margin.left},${this.dimensions.margin.top})`);
         this.renderTitle();
 
-        // Calculate max value for scale
-        const localMax = d3.max(dataPoints, d => {
-            const comparison = this.getComparisonForPoint(d);
-            const variance = Math.abs(this.getVarianceForPoint(d));
-            return Math.max(d.actual, comparison, variance);
-        }) || 0;
-        const maxValue = this.getEffectiveMax(localMax);
-
-        // Scales
-        const xScale = d3.scaleBand()
-            .domain(dataPoints.map(d => d.category))
+        const values: FiniteValue[] = dataPoints.flatMap(point => [
+            point.actual,
+            this.getComparisonForPoint(point),
+            this.getVarianceForPoint(point)
+        ]);
+        const xScale = d3.scaleBand<string>()
+            .domain(this.categoryKeys())
             .range([0, this.chartWidth])
             .padding(0.3);
-
-        const yScale = d3.scaleLinear()
-            .domain([0, maxValue * 1.15])
-            .range([this.chartHeight, 0]);
-
-        // Render axes
-        this.renderXAxis(xScale, this.chartHeight);
+        const yScale = this.createValueScale(values, [this.chartHeight, 0], 0.15);
+        this.renderXAxis(xScale, this.chartHeight, this.categoryLabels());
         this.renderYAxis(yScale);
 
-        // Bar width calculation (3 bars per category)
-        const barWidth = xScale.bandwidth() / 3.5;
+        const slotCount = comparisonPresentation ? 3 : 1;
+        const barWidth = Math.max(0, xScale.bandwidth() / (slotCount + 0.5));
+        const baseline = yScale(0);
+        const actualValues = dataPoints.map(point => point.actual);
 
-        const actualValues = dataPoints.map(p => p.actual);
+        dataPoints.forEach((point, position) => {
+            const xPos = xScale(this.pointKey(point, position)) ?? 0;
+            const comparison = this.getComparisonForPoint(point);
+            const variance = this.getVarianceForPoint(point);
+            const sourceIndex = point.index === null ? null : String(point.index);
+            const sourceIndices = point.sourceIndices.join(",");
 
-        // Draw bars for each data point
-        dataPoints.forEach((d, i) => {
-            const xPos = xScale(d.category) || 0;
-            const comparison = this.getComparisonForPoint(d);
-            const variance = this.getVarianceForPoint(d);
+            if (comparisonPresentation && comparison !== null) {
+                const comparisonY = yScale(comparison);
+                const comparisonBar = this.container.append("rect")
+                    .attr("data-dp-index", sourceIndex)
+                    .attr("data-source-indices", sourceIndices)
+                    .attr("x", xPos)
+                    .attr("y", Math.min(comparisonY, baseline))
+                    .attr("width", barWidth)
+                    .attr("height", Math.abs(baseline - comparisonY));
+                if (point.index === null) comparisonBar.attr("class", "aggregate-point");
 
-            // Comparison bar (IBCS style varies by comparison type)
-            const compBar = this.container.append("rect")
-                .attr("data-dp-index", String(i))
-                .attr("x", xPos)
-                .attr("y", yScale(comparison))
-                .attr("width", barWidth)
-                .attr("height", Math.max(0, this.chartHeight - yScale(comparison)));
-
-            if (this.settings.comparisonType === "forecast") {
-                compBar
-                    .attr("fill", "url(#forecast-hatch)")
-                    .attr("stroke", this.settings.colors.forecast)
-                    .attr("stroke-width", 1);
-            } else if (this.settings.comparisonType === "previousYear") {
-                compBar
-                    .attr("fill", this.settings.colors.previousYear)
-                    .attr("opacity", 0.4);
-            } else {
-                compBar
-                    .attr("fill", "none")
-                    .attr("stroke", this.settings.colors.budget)
-                    .attr("stroke-width", 2)
-                    .attr("stroke-dasharray", "4,2");
+                if (comparisonPresentation.key === "forecast") {
+                    comparisonBar
+                        .attr("fill", `url(#${this.forecastPatternId})`)
+                        .attr("stroke", comparisonPresentation.color)
+                        .attr("stroke-width", 1);
+                } else if (comparisonPresentation.key === "previousYear") {
+                    comparisonBar.attr("fill", comparisonPresentation.color).attr("opacity", 0.4);
+                } else {
+                    comparisonBar
+                        .attr("fill", "none")
+                        .attr("stroke", comparisonPresentation.color)
+                        .attr("stroke-width", 2)
+                        .attr("stroke-dasharray", "4,2");
+                }
             }
 
-            // Actual bar (solid - IBCS style)
-            this.container.append("rect")
-                .attr("data-dp-index", String(i))
-                .attr("x", xPos + barWidth + 2)
-                .attr("y", yScale(d.actual))
-                .attr("width", barWidth)
-                .attr("height", Math.max(0, this.chartHeight - yScale(d.actual)))
-                .attr("fill", this.settings.colors.actual);
+            if (point.actual !== null) {
+                const actualY = yScale(point.actual);
+                const actualX = comparisonPresentation ? xPos + barWidth + 2 : xPos + (xScale.bandwidth() - barWidth) / 2;
+                const actualBar = this.container.append("rect")
+                    .attr("data-dp-index", sourceIndex)
+                    .attr("data-source-indices", sourceIndices)
+                    .attr("x", actualX)
+                    .attr("y", Math.min(actualY, baseline))
+                    .attr("width", barWidth)
+                    .attr("height", Math.abs(baseline - actualY))
+                    .attr("fill", this.settings.colors.actual);
+                if (point.index === null) actualBar.attr("class", "aggregate-point");
+            }
 
-            // Variance bar
-            const varianceColor = this.getVarianceColorForPoint(d);
-            const absVariance = Math.abs(variance);
-            const varianceHeight = Math.abs(yScale(0) - yScale(absVariance));
+            if (variance !== null && comparisonPresentation) {
+                const varianceY = yScale(variance);
+                const varianceColor = this.getVarianceColorForPoint(point);
+                const varianceBar = this.container.append("rect")
+                    .attr("data-dp-index", sourceIndex)
+                    .attr("data-source-indices", sourceIndices)
+                    .attr("x", xPos + (barWidth + 2) * 2)
+                    .attr("y", Math.min(varianceY, baseline))
+                    .attr("width", barWidth)
+                    .attr("height", Math.abs(baseline - varianceY))
+                    .attr("fill", this.settings.highContrast && variance < 0
+                        ? this.settings.background
+                        : varianceColor)
+                    .attr("stroke", this.settings.highContrast ? this.settings.foreground : "none")
+                    .attr("stroke-dasharray", this.settings.highContrast && variance < 0 ? "2,2" : "5,2");
+                if (point.index === null) varianceBar.attr("class", "aggregate-point");
+            }
 
-            this.container.append("rect")
-                .attr("data-dp-index", String(i))
-                .attr("x", xPos + (barWidth + 2) * 2)
-                .attr("y", yScale(absVariance))
-                .attr("width", barWidth)
-                .attr("height", Math.max(0, varianceHeight))
-                .attr("fill", varianceColor);
-
-            // Data labels
-            if (this.settings.dataLabels.show && this.shouldShowLabel(i, dataPoints.length, actualValues)) {
-                // Value label on actual bar
-                if (this.settings.dataLabels.showValues) {
-                    this.container.append("text")
-                        .attr("x", xPos + barWidth + 2 + barWidth / 2)
-                        .attr("y", yScale(d.actual) - 5)
-                        .attr("text-anchor", "middle")
-                        .attr("fill", this.settings.colors.actual)
-                        .attr("font-size", `${this.settings.dataLabels.fontSize}px`)
-                        .text(this.formatValue(d.actual));
-                }
-
-                // Variance label
-                if (this.settings.dataLabels.showVariance) {
-                    const labelText = this.formatVarianceLabel(d);
-
-                    this.container.append("text")
-                        .attr("x", xPos + (barWidth + 2) * 2 + barWidth / 2)
-                        .attr("y", yScale(absVariance) - 5)
-                        .attr("text-anchor", "middle")
-                        .attr("fill", varianceColor)
-                        .attr("font-size", `${this.settings.dataLabels.fontSize}px`)
-                        .attr("font-weight", "bold")
-                        .text(labelText);
-                }
+            if (!this.settings.dataLabels.show || !this.shouldShowLabel(position, dataPoints.length, actualValues)) return;
+            if (this.settings.dataLabels.showValues && point.actual !== null) {
+                const actualY = yScale(point.actual);
+                const actualX = comparisonPresentation ? xPos + barWidth + 2 + barWidth / 2 : xPos + xScale.bandwidth() / 2;
+                this.container.append("text")
+                    .attr("x", actualX)
+                    .attr("y", point.actual >= 0 ? actualY - 5 : actualY + this.settings.dataLabels.fontSize + 3)
+                    .attr("text-anchor", "middle")
+                    .attr("fill", this.settings.colors.actual)
+                    .attr("font-size", `${this.settings.dataLabels.fontSize}px`)
+                    .text(this.formatValue(point.actual));
+            }
+            const varianceLabel = this.formatVarianceLabel(point);
+            if (variance !== null && comparisonPresentation && varianceLabel) {
+                const varianceY = yScale(variance);
+                this.container.append("text")
+                    .attr("x", xPos + (barWidth + 2) * 2 + barWidth / 2)
+                    .attr("y", variance >= 0 ? varianceY - 5 : varianceY + this.settings.dataLabels.fontSize + 3)
+                    .attr("text-anchor", "middle")
+                    .attr("fill", this.getVarianceColorForPoint(point))
+                    .attr("font-size", `${this.settings.dataLabels.fontSize}px`)
+                    .attr("font-weight", "bold")
+                    .text(varianceLabel);
             }
         });
 
-        // Legend
-        const comparisonLabel = this.getComparisonLabel();
-        this.renderLegend([
-            { label: comparisonLabel, color: this.settings.colors.budget, outlined: true },
-            { label: "Actual", color: this.settings.colors.actual },
-            { label: "+Variance", color: this.settings.colors.positiveVariance },
-            { label: "-Variance", color: this.settings.colors.negativeVariance }
-        ]);
-
-        // Render Comment Box
-        this.renderCommentBox();
-    }
-
-    private getComparisonLabel(): string {
-        switch (this.settings.comparisonType) {
-            case "previousYear": return "Previous Year";
-            case "forecast": return "Forecast";
-            default: return "Plan";
+        this.renderCommentMarkers(xScale, yScale);
+        const legend = [{ label: "Actual", color: this.settings.colors.actual }];
+        if (comparisonPresentation) {
+            legend.unshift({ label: comparisonPresentation.label, color: comparisonPresentation.color });
+            legend.push(
+                { label: "+Variance", color: this.settings.colors.positiveVariance },
+                { label: "−Variance", color: this.settings.colors.negativeVariance }
+            );
         }
+        this.renderLegend(legend);
+        this.renderCommentBox();
     }
 }

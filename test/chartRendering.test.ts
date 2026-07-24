@@ -3,8 +3,8 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import * as d3 from "d3";
-import { createChart, ChartSettings, ChartDimensions } from "../src/charts";
-import { ParsedData, parseDataView } from "../src/dataParser";
+import { createChart, ChartSettings, ChartDimensions, getChartValueDomain } from "../src/charts";
+import { ParsedData, parseDataView, subsetParsedData } from "../src/dataParser";
 import { buildMockDataView } from "./helpers/mockDataView";
 import { calculateLayout, getSmallMultiplesViewport, calculateSmallMultiplesGrid, calculateCellLayout, SmallMultiplesConfig, LayoutConfig } from "../src/layoutEngine";
 
@@ -22,6 +22,9 @@ function defaultSettings(overrides: Partial<ChartSettings> = {}): ChartSettings 
             positiveVariance: "#4CAF50",
             negativeVariance: "#F44336"
         },
+        foreground: "#333333",
+        background: "#ffffff",
+        highContrast: false,
         title: { show: false, text: "", fontSize: 14, fontColor: "#333", alignment: "left" },
         dataLabels: {
             show: true, showValues: true, showVariance: true, showPercentage: false,
@@ -143,6 +146,74 @@ describe("Chart rendering - all types", () => {
             });
         });
     }
+});
+
+describe("Cross-chart label and reference-marker behavior", () => {
+    it.each(["combo", "dot"] as const)(
+        "%s honors first-and-last label density",
+        chartType => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["A", "B", "C"],
+                actual: [10, 20, 30],
+                budget: [8, 18, 28]
+            }))!;
+            const settings = defaultSettings({
+                dataLabels: {
+                    ...defaultSettings().dataLabels,
+                    labelDensity: "firstLast"
+                }
+            });
+            createChart(chartType, container, data, settings, defaultDimensions()).render();
+            const directLabels = Array.from(
+                container.node()!.children,
+                element => element
+            ).filter(element => element.tagName.toLowerCase() === "text");
+            expect(directLabels).toHaveLength(2);
+        }
+    );
+
+    it.each(["variance", "bar", "lollipop"] as const)(
+        "%s renders a finite negative reference marker on its value axis",
+        chartType => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["A", "B"],
+                actual: [-20, 20],
+                budget: [-10, 10]
+            }))!;
+            const settings = defaultSettings({
+                axisBreak: { show: true, breakValue: -5 }
+            });
+            createChart(chartType, container, data, settings, defaultDimensions()).render();
+            const marker = container.select<SVGPathElement>(".axis-break-indicator");
+            expect(marker.size()).toBe(1);
+            expect(marker.attr("d")).not.toMatch(/NaN|Infinity/);
+        }
+    );
+
+    it("uses a non-color negative treatment for high-contrast waterfall steps", () => {
+        const data = parseDataView(buildMockDataView({
+            categories: ["A"],
+            actual: [8],
+            budget: [10]
+        }))!;
+        const settings = defaultSettings({
+            highContrast: true,
+            foreground: "#ffffff",
+            background: "#000000",
+            colors: {
+                actual: "#ffffff",
+                budget: "#ffffff",
+                previousYear: "#ffffff",
+                forecast: "#ffffff",
+                positiveVariance: "#ffffff",
+                negativeVariance: "#ffffff"
+            }
+        });
+        createChart("waterfall", container, data, settings, defaultDimensions()).render();
+        const step = container.select<SVGRectElement>(".waterfall-step");
+        expect(step.attr("fill")).toBe("#000000");
+        expect(step.attr("stroke-dasharray")).toBe("2,2");
+    });
 });
 
 // ── Specific chart behavior tests ──
@@ -637,6 +708,54 @@ describe("Edge cases", () => {
         }).not.toThrow();
     });
 
+    it.each(chartTypes)("%s honors all data-label detail toggles", chartType => {
+        const settings = defaultSettings({
+            dataLabels: {
+                ...defaultSettings().dataLabels,
+                show: true,
+                showValues: false,
+                showVariance: false,
+                showPercentage: false,
+                fontSize: 37
+            }
+        });
+        createChart(chartType, container, sampleData(), settings, defaultDimensions()).render();
+        expect(container.selectAll('text[font-size="37px"]').size()).toBe(0);
+    });
+
+    it("formats absolute and percentage variance labels independently", () => {
+        const data = parseDataView(buildMockDataView({
+            categories: ["A"],
+            actual: [100],
+            budget: [80]
+        }))!;
+        const settings = defaultSettings({
+            dataLabels: {
+                ...defaultSettings().dataLabels,
+                showValues: false,
+                showVariance: true,
+                showPercentage: true,
+                fontSize: 37
+            }
+        });
+        createChart("variance", container, data, settings, defaultDimensions()).render();
+        expect(container.select('text[font-size="37px"]').text()).toBe("+20.0 (+25.0%)");
+    });
+
+    it.each(["bar", "lollipop"] as const)("%s hides its category axis when categories are disabled", chartType => {
+        const settings = defaultSettings({
+            categories: { ...defaultSettings().categories, show: false }
+        });
+        createChart(chartType, container, sampleData(), settings, defaultDimensions()).render();
+        expect(container.selectAll(".y-axis").size()).toBe(0);
+        expect(container.selectAll(".x-axis").size()).toBe(1);
+    });
+
+    it("centers unrotated category labels on their ticks", () => {
+        createChart("column", container, sampleData(), defaultSettings(), defaultDimensions()).render();
+        expect(container.select(".x-axis text").style("text-anchor")).toBe("middle");
+    });
+
     it("invertVariance flips variance polarity colors in variance chart", () => {
         const dv = buildMockDataView({
             categories: ["A", "B", "C"],
@@ -682,9 +801,9 @@ describe("Edge cases", () => {
             const lastConnector = connectors.nodes()[connectors.size() - 1] as SVGLineElement;
             const connectorY = Number(lastConnector.getAttribute("y1"));
 
-            const totalRects = container.selectAll(`rect[fill="${settings.colors.actual}"]`).nodes() as SVGRectElement[];
-            const actualTotalRect = totalRects[totalRects.length - 1];
-            const actualY = Number(actualTotalRect.getAttribute("y"));
+            const totals = container.selectAll(".synthetic-total").nodes() as SVGPathElement[];
+            const actualTotal = totals[totals.length - 1];
+            const actualY = Number(actualTotal.getAttribute("d")!.match(/^M[^,]+,([^ ]+)/)![1]);
 
             expect(Math.abs(connectorY - actualY)).toBeLessThan(0.001);
         }
@@ -719,6 +838,356 @@ describe("DOM limitations awareness", () => {
         // happy-dom does not compute text metrics — always returns 0
         // This means label truncation in renderXAxis won't execute in tests
         expect(textEl.getComputedTextLength()).toBe(0);
+    });
+
+    describe("Certification hardening regressions", () => {
+        function assertFiniteSvg(): void {
+            container.selectAll("*").each(function() {
+                const element = d3.select(this);
+                const path = element.attr("d");
+                if (path) expect(path).not.toMatch(/NaN|Infinity/);
+                for (const attribute of ["x", "y", "width", "height", "cx", "cy", "r", "x1", "y1", "x2", "y2"]) {
+                    const raw = element.attr(attribute);
+                    if (raw !== null) {
+                        expect(raw).not.toMatch(/NaN|Infinity/);
+                        expect(Number.isFinite(Number(raw))).toBe(true);
+                    }
+                }
+            });
+        }
+
+        it.each(chartTypes)("%s keeps mixed signs/zero and emits only finite SVG geometry", chartType => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["positive", "negative", "zero", "missing", "overflow", "infinite"],
+                actual: [100, -50, 0, null, Number.MAX_VALUE, Number.POSITIVE_INFINITY],
+                budget: [80, -70, 0, 20, -Number.MAX_VALUE],
+                previousYear: [90, -40, 0],
+                forecast: [110, -60, 0, Number.NaN]
+            }))!;
+            createChart(chartType, container, data, defaultSettings(), defaultDimensions()).render();
+            assertFiniteSvg();
+        });
+
+        it("positions duplicate category labels by row key rather than collapsing bands", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["Same", "Same", "Same"],
+                actual: [10, 20, 30]
+            }))!;
+            createChart("column", container, data, defaultSettings(), defaultDimensions()).render();
+            const positions = container.selectAll(`rect[fill="${defaultSettings().colors.actual}"]`).nodes()
+                .map(node => Number(node.getAttribute("x")));
+            expect(new Set(positions).size).toBe(3);
+            expect(container.selectAll(".x-axis .tick").size()).toBe(3);
+        });
+
+        it("uses separate positive/negative stack accumulators and keeps both extents visible", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["Mixed"],
+                actual: [100],
+                budget: [-70]
+            }))!;
+            createChart("columnStacked", container, data, defaultSettings(), defaultDimensions()).render();
+            const rects = container.selectAll("rect[data-dp-index]").nodes() as SVGRectElement[];
+            expect(rects).toHaveLength(2);
+            const firstBottom = Number(rects[0].getAttribute("y")) + Number(rects[0].getAttribute("height"));
+            const secondTop = Number(rects[1].getAttribute("y"));
+            expect(firstBottom).toBeCloseTo(secondTop, 5);
+            expect(Number(rects[0].getAttribute("height"))).toBeGreaterThan(0);
+            expect(Number(rects[1].getAttribute("height"))).toBeGreaterThan(0);
+        });
+
+        it("contains overflowing stacked totals without emitting infinite geometry", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["Extreme"],
+                actual: [Number.MAX_VALUE],
+                budget: [Number.MAX_VALUE]
+            }))!;
+            expect(getChartValueDomain("columnStacked", data, "budget", false))
+                .toEqual([0, Number.MAX_VALUE]);
+            createChart("columnStacked", container, data, defaultSettings(), defaultDimensions()).render();
+            assertFiniteSvg();
+            expect(container.selectAll("rect[data-source-indices]").size()).toBeGreaterThan(0);
+        });
+
+        it("area creates indexed host hit targets for finite zero/negative points and gaps missing points", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["A", "B", "C", "D"],
+                actual: [10, 0, -5, null]
+            }))!;
+            createChart("area", container, data, defaultSettings(), defaultDimensions()).render();
+            const targets = container.selectAll(".area-hit-target");
+            expect(targets.size()).toBe(3);
+            expect(targets.nodes().map(node => node.getAttribute("data-dp-index"))).toEqual(["0", "1", "2"]);
+            expect(container.select(".area-actual").attr("d")).not.toMatch(/NaN|Infinity/);
+        });
+
+        it("waterfall synthetic totals have no identity while steps retain original source indices", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["Plan Total", "Actual", "Actual"],
+                actual: [-20, -30, -40],
+                budget: [-10, -20, -30]
+            }))!;
+            createChart("waterfall", container, data, defaultSettings(), defaultDimensions()).render();
+            const synthetic = container.selectAll(".synthetic-total");
+            expect(synthetic.size()).toBe(2);
+            synthetic.each(function() {
+                expect(this.hasAttribute("data-dp-index")).toBe(false);
+            });
+            expect(container.selectAll(".waterfall-step").nodes().map(node => node.getAttribute("data-dp-index")))
+                .toEqual(["0", "1", "2"]);
+            const zeroY = Number(container.select('line[stroke-dasharray="3,3"]').attr("y1"));
+            synthetic.each(function() {
+                const topY = Number(this.getAttribute("d")!.match(/^M[^,]+,([^ ]+)/)![1]);
+                expect(topY).toBeCloseTo(zeroY, 5);
+            });
+            expect(container.selectAll(".x-axis .tick").size()).toBe(5);
+        });
+
+        it("falls back to the available comparison with its correct label and color", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["A"], actual: [100], budget: [90]
+            }))!;
+            const settings = defaultSettings({
+                comparisonType: "forecast",
+                legend: { show: true, position: "right", fontSize: 10 }
+            });
+            createChart("dot", container, data, settings, defaultDimensions()).render();
+            expect(container.select(".legend").text()).toContain("Plan");
+            expect(container.selectAll(`circle[stroke="${settings.colors.budget}"]`).size()).toBeGreaterThan(0);
+            expect(container.selectAll(`circle[stroke="${settings.colors.forecast}"]`).size()).toBe(0);
+        });
+
+        it("handles every comparator role subset and preferred-comparison combination across all chart types", () => {
+            for (let mask = 0; mask < 8; mask++) {
+                const input = {
+                    categories: ["A", "B", "C"],
+                    actual: [10, 0, -10],
+                    ...(mask & 1 ? { budget: [8, 0, -8] } : {}),
+                    ...(mask & 2 ? { previousYear: [9, 0, -9] } : {}),
+                    ...(mask & 4 ? { forecast: [11, 0, -11] } : {})
+                };
+                const data = parseDataView(buildMockDataView(input))!;
+                for (const comparisonType of ["budget", "previousYear", "forecast"] as const) {
+                    for (const chartType of chartTypes) {
+                        container.selectAll("*").remove();
+                        createChart(chartType, container, data, defaultSettings({ comparisonType }), defaultDimensions()).render();
+                        assertFiniteSvg();
+                    }
+                }
+            }
+        });
+
+        it("renders honest actual-only/no-comparison states instead of actual-vs-zero variance", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["A", "B"], actual: [100, -40]
+            }))!;
+            createChart("variance", container, data, defaultSettings(), defaultDimensions()).render();
+            expect(container.selectAll("rect[data-dp-index]").size()).toBe(2);
+            expect(container.selectAll(`rect[fill="${defaultSettings().colors.positiveVariance}"]`).size()).toBe(0);
+            container.selectAll("*").remove();
+            createChart("lollipop", container, data, defaultSettings(), defaultDimensions()).render();
+            expect(container.select(".no-comparison").text()).toBe("No comparison available");
+        });
+
+        it("omits unavailable percentages and renders zero variance without an icon", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["Zero base", "Exact"],
+                actual: [50, 20],
+                budget: [0, 20],
+                comments: ["Undefined pct", "No change"]
+            }))!;
+            const dims = defaultDimensions();
+            dims.layout = {
+                chartArea: { x: 0, y: 0, width: 300, height: 200 },
+                commentBoxArea: { x: 300, y: 0, width: 220, height: 200 }
+            };
+            const settings = defaultSettings({
+                commentBox: {
+                    ...defaultSettings().commentBox,
+                    show: true,
+                    showVariance: "relative",
+                    varianceIcon: "triangle"
+                }
+            });
+            createChart("variance", container, data, settings, dims).render();
+            expect(container.select(".comment-box").text()).not.toContain("—");
+            expect(container.selectAll(".variance-icon").size()).toBe(1);
+            const zeroVarianceBar = container.selectAll(`rect[fill="${settings.colors.actual}"][data-dp-index="1"]`);
+            expect(zeroVarianceBar.size()).toBeGreaterThan(0);
+        });
+
+        it("honors model format strings for chart labels", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["A"],
+                actual: [1234.5],
+                formats: { actual: "$#,0.00" }
+            }), "en-US")!;
+            const settings = defaultSettings({
+                dataLabels: { ...defaultSettings().dataLabels, displayUnits: "none", decimalPlaces: 2 }
+            });
+            createChart("column", container, data, settings, defaultDimensions()).render();
+            expect(container.text()).toContain("$1,234.50");
+        });
+
+        it("uses unique SVG pattern IDs for each chart instance", () => {
+            const root = d3.select(svgEl);
+            const first = root.append("g") as d3.Selection<SVGGElement, unknown, null, undefined>;
+            const second = root.append("g") as d3.Selection<SVGGElement, unknown, null, undefined>;
+            const data = parseDataView(buildMockDataView({
+                categories: ["A"], actual: [100], forecast: [90]
+            }))!;
+            const settings = defaultSettings({ comparisonType: "forecast" });
+            createChart("variance", first, data, settings, defaultDimensions()).render();
+            createChart("variance", second, data, settings, defaultDimensions()).render();
+            const ids = root.selectAll("pattern").nodes().map(node => node.id);
+            expect(ids).toHaveLength(2);
+            expect(new Set(ids).size).toBe(2);
+        });
+
+        it("axis-break setting is a non-destructive continuous-scale marker", () => {
+            const settings = defaultSettings({ axisBreak: { show: true, breakValue: 50 } });
+            createChart("column", container, sampleData(), settings, defaultDimensions()).render();
+            expect(container.selectAll(".axis-break-indicator").size()).toBe(1);
+            expect(container.selectAll('rect[fill="white"]').size()).toBe(0);
+        });
+
+        it("uses local domains independently and one explicit shared domain, including mixed negatives", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["Positive", "Negative", "Positive", "Negative"],
+                groups: ["Small", "Small", "Large", "Large"],
+                actual: [10, -5, 10_000, -5_000]
+            }))!;
+            const small = subsetParsedData(data, data.dataPoints.slice(0, 2));
+            const large = subsetParsedData(data, data.dataPoints.slice(2));
+            const shared = getChartValueDomain("column", data, "budget", false);
+            expect(getChartValueDomain("column", small, "budget", false)).toEqual([-5, 10]);
+            expect(getChartValueDomain("column", large, "budget", false)).toEqual([-5_000, 10_000]);
+            expect(shared).toEqual([-5_000, 10_000]);
+
+            const root = d3.select(svgEl);
+            const smallIndependent = root.append("g") as d3.Selection<SVGGElement, unknown, null, undefined>;
+            const largeIndependent = root.append("g") as d3.Selection<SVGGElement, unknown, null, undefined>;
+            createChart("column", smallIndependent, small, defaultSettings(), defaultDimensions()).render();
+            createChart("column", largeIndependent, large, defaultSettings(), defaultDimensions()).render();
+            const independentSmallHeight = Number(smallIndependent.select('[data-source-indices="0"]').attr("height"));
+            const independentLargeHeight = Number(largeIndependent.select('[data-source-indices="2"]').attr("height"));
+            expect(independentSmallHeight).toBeCloseTo(independentLargeHeight, 5);
+            expect(independentSmallHeight / 10).toBeGreaterThan((independentLargeHeight / 10_000) * 100);
+
+            const smallShared = root.append("g") as d3.Selection<SVGGElement, unknown, null, undefined>;
+            const largeShared = root.append("g") as d3.Selection<SVGGElement, unknown, null, undefined>;
+            createChart("column", smallShared, small, defaultSettings({ sharedValueDomain: shared }), defaultDimensions()).render();
+            createChart("column", largeShared, large, defaultSettings({ sharedValueDomain: shared }), defaultDimensions()).render();
+            const sharedSmallHeight = Number(smallShared.select('[data-source-indices="0"]').attr("height"));
+            const sharedLargeHeight = Number(largeShared.select('[data-source-indices="2"]').attr("height"));
+            expect(sharedSmallHeight / 10).toBeCloseTo(sharedLargeHeight / 10_000, 5);
+        });
+
+        it("reconciles waterfall opening, steps, and closing from complete pairs per group", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["Paired", "Missing pair", "Paired", "Missing pair"],
+                groups: ["East", "East", "West", "West"],
+                actual: [100, 999, 50, 500],
+                budget: [80, null, 40, null]
+            }))!;
+            expect(getChartValueDomain("waterfall", data, "budget", false)).toEqual([0, 100]);
+            const east = subsetParsedData(data, data.dataPoints.slice(0, 2));
+            createChart("waterfall", container, east, defaultSettings(), defaultDimensions()).render();
+            expect(container.selectAll(".waterfall-step").size()).toBe(1);
+            expect(container.selectAll(".synthetic-total").size()).toBe(2);
+            expect(container.text()).toContain("100.0");
+            expect(container.text()).not.toContain("1,099.0");
+
+            container.selectAll("*").remove();
+            const withSubtotal = parseDataView(buildMockDataView({
+                categories: ["Paired", "Checkpoint", "Missing pair"],
+                actual: [100, 100, 999],
+                budget: [80, 80, null],
+                comments: ["", "= subtotal", ""]
+            }))!;
+            expect(getChartValueDomain("waterfall", withSubtotal, "budget", false)).toEqual([0, 100]);
+            createChart("waterfall", container, withSubtotal, defaultSettings(), defaultDimensions()).render();
+            expect(container.selectAll(".waterfall-step").size()).toBe(1);
+            expect(container.selectAll(".waterfall-total[data-source-indices]").size()).toBe(1);
+        });
+
+        it("falls back consistently when waterfall totals or intermediate steps overflow", () => {
+            const grouped = parseDataView(buildMockDataView({
+                categories: ["A", "B", "A"],
+                groups: ["Extreme", "Extreme", "Normal"],
+                actual: [Number.MAX_VALUE, Number.MAX_VALUE, 10],
+                budget: [Number.MAX_VALUE, Number.MAX_VALUE, 8]
+            }))!;
+            expect(getChartValueDomain("waterfall", grouped, "budget", false))
+                .toEqual([0, Number.MAX_VALUE]);
+
+            const halfMax = Number.MAX_VALUE / 2;
+            const intermediateOverflow = parseDataView(buildMockDataView({
+                categories: ["A", "B"],
+                actual: [Number.MAX_VALUE, 0],
+                budget: [halfMax, halfMax]
+            }))!;
+            createChart("waterfall", container, intermediateOverflow, defaultSettings(), defaultDimensions()).render();
+            expect(container.selectAll(".waterfall-step").size()).toBe(0);
+            expect(container.selectAll(".synthetic-total").size()).toBe(0);
+            expect(container.selectAll(".waterfall-total[data-source-indices]").size()).toBe(2);
+            assertFiniteSvg();
+        });
+
+        it("applies one Auto unit to axes and labels while None stays unscaled", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["Revenue"],
+                actual: [1_500_000]
+            }), "en-US")!;
+            const auto = defaultSettings({ displayUnitReference: 1_500_000 });
+            createChart("column", container, data, auto, defaultDimensions()).render();
+            expect(container.text()).toContain("1.5M");
+            expect(container.text()).not.toContain("1,500,000");
+
+            container.selectAll("*").remove();
+            const none = defaultSettings({
+                displayUnitReference: 1_500_000,
+                dataLabels: { ...defaultSettings().dataLabels, displayUnits: "none" }
+            });
+            createChart("column", container, data, none, defaultDimensions()).render();
+            expect(container.text()).toContain("1,500,000.0");
+            expect(container.text()).not.toContain("1.5M");
+        });
+
+        it("uses high-contrast foreground/background for comments and forecast hatching", () => {
+            const data = parseDataView(buildMockDataView({
+                categories: ["A"],
+                actual: [100],
+                forecast: [90],
+                comments: ["Accessible note"]
+            }))!;
+            const dims = defaultDimensions();
+            dims.layout = {
+                chartArea: { x: 0, y: 0, width: 300, height: 200 },
+                commentBoxArea: { x: 300, y: 0, width: 220, height: 200 }
+            };
+            const settings = defaultSettings({
+                comparisonType: "forecast",
+                foreground: "#ffff00",
+                background: "#000000",
+                highContrast: true,
+                commentBox: {
+                    ...defaultSettings().commentBox,
+                    show: true,
+                    fontColor: "#ffff00",
+                    markerColor: "#ffff00"
+                }
+            });
+            createChart("variance", container, data, settings, dims).render();
+            const commentBox = container.select<SVGForeignObjectElement>(".comment-box").node();
+            const styleText = Array.from(
+                commentBox?.querySelectorAll<HTMLElement>("[style]") ?? [],
+                element => element.getAttribute("style") ?? ""
+            ).join(" ");
+            expect(styleText).toContain("#ffff00");
+            expect(styleText).not.toMatch(/#333|#666|#999|#1a73e8|white/i);
+            expect(container.select("pattern line").attr("stroke")).toBe("#000000");
+        });
     });
 });
 

@@ -1,1310 +1,1718 @@
 /*
-*  Power BI Visual CLI - Atlyn Variance Chart
-*  Free alternative to ZebraBI with IBCS-compliant variance analysis
-*/
+ * Power BI Visualizations - Atlyn Variance Chart
+ */
 "use strict";
 
 import powerbi from "powerbi-visuals-api";
 import { FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
 import * as d3 from "d3";
+import {
+    BasicFilter,
+    TupleFilter,
+    FilterType,
+    IBasicFilter,
+    IFilterColumnTarget,
+    ITupleFilter,
+    PrimitiveValueType,
+    TupleValueType
+} from "powerbi-models";
 import "./../style/visual.less";
 
 import VisualConstructorOptions = powerbi.extensibility.visual.VisualConstructorOptions;
 import VisualUpdateOptions = powerbi.extensibility.visual.VisualUpdateOptions;
 import IVisual = powerbi.extensibility.visual.IVisual;
 import IVisualHost = powerbi.extensibility.visual.IVisualHost;
+import IVisualEventService = powerbi.extensibility.IVisualEventService;
 import ISelectionManager = powerbi.extensibility.ISelectionManager;
-import ISelectionId = powerbi.extensibility.ISelectionId;
+import ISelectionId = powerbi.visuals.ISelectionId;
 import DataView = powerbi.DataView;
-import IColorPalette = powerbi.extensibility.IColorPalette;
-import ITooltipService = powerbi.extensibility.ITooltipService;
+import DataViewCategoryColumn = powerbi.DataViewCategoryColumn;
 import VisualTooltipDataItem = powerbi.extensibility.VisualTooltipDataItem;
 
 import { VisualFormattingSettingsModel } from "./settings";
-import { parseDataView, ParsedData, ComparisonType, DataPoint, applyTopN, getVariance, getVariancePct } from "./dataParser";
-import { createChart, ChartType, ChartSettings, ChartDimensions, ChartLayout, Rect } from "./charts";
-import { IBCSColors, DEFAULT_IBCS_COLORS } from "./utils/colors";
-import { formatNumber, formatPercent } from "./utils/formatting";
-import { calculateLayout as calculateLayoutEngine, getCommentBoxPosition, LayoutConfig, calculateSmallMultiplesGrid, calculateCellLayout, getSmallMultiplesViewport, SmallMultiplesConfig } from "./layoutEngine";
-import { BasicFilter } from "powerbi-models";
+import {
+    applyTopN,
+    ComparisonType,
+    DataPoint,
+    FiniteValue,
+    getComparisonValue,
+    getDataPointGroupKey,
+    getGroupKeys,
+    getAvailableComparisonType,
+    getVariance,
+    getVariancePct,
+    MeasureKey,
+    ParsedData,
+    parseDataView,
+    subsetParsedData
+} from "./dataParser";
+import { ChartDimensions, ChartSettings, ChartType, createChart, getChartValueDomain } from "./charts";
+import { IBCSColors } from "./utils/colors";
+import { formatModelValue, formatNumber, formatPercent, NumberScale } from "./utils/formatting";
+import {
+    calculateCellLayout,
+    calculateLayout as calculateLayoutEngine,
+    calculateSmallMultiplesGrid,
+    getSmallMultiplesViewport,
+    LayoutConfig,
+    Rect as LayoutRect,
+    SmallMultiplesConfig
+} from "./layoutEngine";
+
+type FilterValue = PrimitiveValueType;
+interface FilterTuple {
+    category: FilterValue;
+    group?: FilterValue;
+}
+type LegendPosition = "top" | "bottom" | "left" | "right";
+const FILTER_MERGE = (powerbi.FilterAction?.merge ?? 0) as powerbi.FilterAction;
+const FILTER_REMOVE = (powerbi.FilterAction?.remove ?? 1) as powerbi.FilterAction;
+const DRILL_DOWN = (powerbi.DrillType?.Down ?? 2) as powerbi.DrillType;
+const DRILL_UP = (powerbi.DrillType?.Up ?? 1) as powerbi.DrillType;
+const CHART_TYPES: readonly ChartType[] = [
+    "variance", "waterfall", "column", "columnStacked", "bar",
+    "line", "area", "combo", "dot", "lollipop"
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+}
+
+function isFilterValue(value: unknown): value is FilterValue {
+    return typeof value === "string"
+        || (typeof value === "number" && Number.isFinite(value))
+        || typeof value === "boolean";
+}
+
+function isColumnTarget(value: unknown): value is IFilterColumnTarget {
+    return isRecord(value) && typeof value.table === "string" && typeof value.column === "string";
+}
+
+function isBasicFilter(filter: powerbi.IFilter): filter is powerbi.IFilter & IBasicFilter {
+    const candidate: unknown = filter;
+    return isRecord(candidate)
+        && candidate.operator === "In"
+        && candidate.filterType === FilterType.Basic
+        && isColumnTarget(candidate.target)
+        && Array.isArray(candidate.values)
+        && candidate.values.every(isFilterValue);
+}
+
+function isTupleFilter(filter: powerbi.IFilter): filter is powerbi.IFilter & ITupleFilter {
+    const candidate: unknown = filter;
+    return isRecord(candidate)
+        && candidate.operator === "In"
+        && candidate.filterType === FilterType.Tuple
+        && Array.isArray(candidate.target)
+        && candidate.target.every(isColumnTarget)
+        && Array.isArray(candidate.values)
+        && candidate.values.every(tuple =>
+            Array.isArray(tuple)
+            && tuple.every(element => isRecord(element) && isFilterValue(element.value))
+        );
+}
+
+function isVisualSelectionId(
+    selectionId: powerbi.extensibility.ISelectionId
+): selectionId is ISelectionId {
+    return "equals" in selectionId
+        && typeof selectionId.equals === "function"
+        && "getKey" in selectionId
+        && typeof selectionId.getKey === "function";
+}
+
+function finiteDimension(value: number): number {
+    return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+function finiteSetting(
+    value: unknown,
+    fallback: number,
+    minimum = 0,
+    maximum = Number.MAX_VALUE
+): number {
+    return typeof value === "number" && Number.isFinite(value)
+        ? Math.min(maximum, Math.max(minimum, value))
+        : fallback;
+}
+
+function enumSetting<T extends string>(
+    value: unknown,
+    allowed: readonly T[],
+    fallback: T
+): T {
+    return typeof value === "string" && allowed.includes(value as T)
+        ? value as T
+        : fallback;
+}
 
 export class Visual implements IVisual {
-    private target: HTMLElement;
-    private svg: d3.Selection<SVGSVGElement, unknown, null, undefined>;
-    private chartContainer: d3.Selection<SVGGElement, unknown, null, undefined>;
-    private formattingSettings: VisualFormattingSettingsModel;
-    private formattingSettingsService: FormattingSettingsService;
-    
-    // Power BI services
-    private host: IVisualHost;
-    private selectionManager: ISelectionManager;
-    private tooltipService: ITooltipService;
-    private colorPalette: IColorPalette;
-    
-    // State
-    private dataView: DataView;
-    private parsedData: ParsedData | null;
-    private selectionIds: ISelectionId[] = [];
-    private isHighContrast: boolean = false;
-    private highContrastColors: { foreground: string; background: string; } | null = null;
+    private readonly target: HTMLElement;
+    private readonly host: IVisualHost;
+    private readonly eventService: IVisualEventService;
+    private readonly selectionManager: ISelectionManager;
+    private readonly formattingSettingsService: FormattingSettingsService;
+    private readonly svg: d3.Selection<SVGSVGElement, unknown, null, undefined>;
+    private readonly chartContainer: d3.Selection<SVGGElement, unknown, null, undefined>;
+    private readonly statusRegion: HTMLDivElement;
 
-    constructor(options: VisualConstructorOptions) {
-        this.formattingSettingsService = new FormattingSettingsService();
+    private formattingSettings: VisualFormattingSettingsModel;
+    private dataView?: DataView;
+    private parsedData: ParsedData | null = null;
+    private selectionIds: ISelectionId[] = [];
+    private filterTuples = new Map<string, FilterTuple>();
+    private focusSourceKey: string | null = null;
+    private foreground: string;
+    private background: string;
+    private selectionColor: string;
+
+    constructor(options?: VisualConstructorOptions) {
+        if (!options) throw new Error("Visual constructor options are required.");
         this.target = options.element;
         this.host = options.host;
-        
-        // Initialize Power BI services
-        this.selectionManager = this.host.createSelectionManager();
-        this.tooltipService = this.host.tooltipService;
-        this.colorPalette = this.host.colorPalette;
-        
-        // Check for high contrast mode (safely check if property exists)
-        const palette = this.colorPalette as any;
-        if (palette && typeof palette.isHighContrast === 'boolean') {
-            this.isHighContrast = palette.isHighContrast;
-            if (this.isHighContrast && palette.foreground && palette.background) {
-                this.highContrastColors = {
-                    foreground: palette.foreground.value,
-                    background: palette.background.value
-                };
-            }
-        }
+        this.eventService = options.host.eventService;
+        this.selectionManager = options.host.createSelectionManager();
+        this.formattingSettingsService = new FormattingSettingsService();
+        this.formattingSettings = new VisualFormattingSettingsModel();
 
-        // Allow interactions to be restored on bookmark apply
-        this.selectionManager.registerOnSelectCallback((ids: ISelectionId[]) => {
-            this.syncSelectionState(ids);
-        });
+        const palette = this.host.colorPalette;
+        this.foreground = palette.foreground?.value ?? "#333333";
+        this.background = palette.background?.value ?? "#ffffff";
+        this.selectionColor = palette.selection?.value ?? palette.foregroundSelected?.value ?? this.foreground;
 
-        // Create SVG container
+        this.target.classList.add("atlyn-visual-host");
+        this.target.style.overflow = "auto";
+        this.target.style.setProperty("--atlyn-foreground", this.foreground);
+        this.target.style.setProperty("--atlyn-background", this.background);
+        this.target.style.setProperty("--atlyn-selection", this.selectionColor);
+
+        this.statusRegion = document.createElement("div");
+        this.statusRegion.className = "atlyn-visually-hidden";
+        this.statusRegion.setAttribute("role", "status");
+        this.statusRegion.setAttribute("aria-live", "polite");
+        this.statusRegion.setAttribute("aria-atomic", "true");
+        this.target.appendChild(this.statusRegion);
+
         this.svg = d3.select(this.target)
             .append("svg")
-            .classed("varianceChart", true);
+            .classed("varianceChart", true)
+            .classed("high-contrast", palette.isHighContrast === true)
+            .attr("role", "group")
+            .attr("aria-label", "Atlyn Variance Chart")
+            .attr("aria-description", "Interactive variance analysis chart")
+            .attr("tabindex", 0);
 
-        this.chartContainer = this.svg.append("g")
-            .classed("chartContainer", true);
+        this.chartContainer = this.svg.append("g").classed("chartContainer", true);
+        this.applyThemeDefaults();
 
-        // Handle context menu
-        this.svg.on("contextmenu", (event: MouseEvent) => {
-            event.preventDefault();
-            this.selectionManager.showContextMenu(
-                {},
-                { x: event.clientX, y: event.clientY }
-            );
+        this.selectionManager.registerOnSelectCallback(ids => {
+            if (this.getInteractionMode() === "highlight") {
+                this.syncSelectionState(ids.filter(isVisualSelectionId));
+            }
         });
+
+        this.svg.on("click", (event: MouseEvent) => this.handleBackgroundClick(event));
+        this.svg.on("contextmenu", (event: MouseEvent) => this.handleContextMenu(event));
+        this.svg.on("keydown", (event: KeyboardEvent) => this.handleRootKeydown(event));
     }
 
-    public update(options: VisualUpdateOptions) {
-        const startTime = performance.now();
-        
-        // Signal render started
-        this.host.eventService?.renderingStarted(options);
-
+    public update(options: VisualUpdateOptions): void {
+        this.eventService.renderingStarted(options);
         try {
-            // Clear previous content and reset container transform
-            this.chartContainer.selectAll("*").remove();
-            this.chartContainer.attr("transform", null);
-            this.selectionIds = [];
-
-            this.dataView = options.dataViews?.[0];
-            if (!this.dataView) {
-                this.renderLandingPage();
-                this.host.eventService?.renderingFinished(options);
-                return;
+            this.renderUpdate(options);
+        } catch {
+            try {
+                this.renderFailure("The visual could not be rendered.");
+            } catch {
+                this.announce("The visual could not be rendered.");
             }
-
-            this.formattingSettings = this.formattingSettingsService.populateFormattingSettingsModel(
-                VisualFormattingSettingsModel,
-                this.dataView
-            );
-
-            // Telemetry check
-            const enableTelemetry = this.formattingSettings.interactionCard.enableTelemetry.value;
-            if (enableTelemetry) {
-                console.group("[Atlyn Variance Chart] Update Cycle");
-                console.log("Input Viewport:", options.viewport);
-                console.log("DataView Metadata:", this.dataView.metadata);
-            }
-
-            // Restore cross-filter state from bookmarks
-            const jsonFilters = (options as any).jsonFilters;
-            if (jsonFilters && Array.isArray(jsonFilters) && jsonFilters.length > 0) {
-                this.crossFilterValues.clear();
-                for (const f of jsonFilters) {
-                    if (f && f.values && Array.isArray(f.values)) {
-                        for (const v of f.values) {
-                            this.crossFilterValues.add(String(v));
-                        }
-                    }
-                }
-                if (enableTelemetry) {
-                    console.log("Restored cross-filter from bookmark:", Array.from(this.crossFilterValues));
-                }
-            }
-
-            // Use actual container dimensions to avoid Power BI viewport/padding mismatch
-            const width = Math.min(options.viewport.width, this.target.clientWidth) || options.viewport.width;
-            const height = Math.min(options.viewport.height, this.target.clientHeight) || options.viewport.height;
-
-            this.svg
-                .attr("width", width)
-                .attr("height", height);
-
-            // Parse data with automatic variance calculations
-            const parseStart = performance.now();
-            this.parsedData = parseDataView(this.dataView);
-            const parseTime = performance.now() - parseStart;
-
-            if (enableTelemetry) {
-                console.log("Data Parsing:", {
-                    durationMs: parseTime.toFixed(2),
-                    dataPoints: this.parsedData?.dataPoints.length,
-                    groups: this.parsedData?.groups.length,
-                    hasBudget: this.parsedData?.hasBudget,
-                    hasPY: this.parsedData?.hasPreviousYear,
-                    hasForecast: this.parsedData?.hasForecast,
-                    maxValue: this.parsedData?.maxValue
-                });
-            }
-
-            if (!this.parsedData || this.parsedData.dataPoints.length === 0) {
-                this.renderLandingPage();
-                if (enableTelemetry) console.groupEnd();
-                this.host.eventService?.renderingFinished(options);
-                return;
-            }
-
-            // Create selection IDs for each data point
-            this.createSelectionIds();
-
-            // Get chart type from settings
-            let chartType = this.formattingSettings.chartSettingsCard.chartType.value.value as ChartType;
-            let comparisonType = this.formattingSettings.chartSettingsCard.comparisonType.value.value as ComparisonType;
-
-            if (enableTelemetry) {
-                console.log("Initial Settings:", { chartType, comparisonType });
-            }
-
-            // Apply orientation: swap to horizontal equivalent if set
-            const orientation = String(this.formattingSettings.chartSettingsCard.orientation.value.value);
-            if (orientation === "horizontal") {
-                switch (chartType) {
-                    case "column":
-                    case "columnStacked":
-                        chartType = "bar";
-                        break;
-                    case "variance":
-                    case "waterfall":
-                    case "combo":
-                    case "area":
-                        // These don't have horizontal variants, use bar
-                        chartType = "bar";
-                        break;
-                    // bar, lollipop, line, dot already work horizontally or are orientation-agnostic
-                }
-            } else if (orientation === "vertical" && chartType === "bar") {
-                chartType = "column";
-            }
-
-            // Auto-detect comparison type if selected one is not available
-            if (!this.hasComparisonData(this.parsedData, comparisonType)) {
-                const availableComparison = this.getAvailableComparisonType(this.parsedData);
-                
-                if (availableComparison) {
-                    comparisonType = availableComparison;
-                } else if (chartType === "variance" || chartType === "waterfall" || chartType === "lollipop" || chartType === "dot") {
-                    this.renderNoData("Add Plan, Previous Year, or Forecast field for variance analysis");
-                    this.host.eventService?.renderingFinished(options);
-                    return;
-                }
-            }
-
-            // Apply Top N + Others filtering
-            const topN = this.formattingSettings.topNCard;
-            this.parsedData = applyTopN(this.parsedData, {
-                enable: topN.enable.value,
-                count: topN.count.value,
-                sortBy: String(topN.sortBy.value.value),
-                sortDirection: String(topN.sortDirection.value.value),
-                showOthers: topN.showOthers.value,
-                othersLabel: topN.othersLabel.value || "Others",
-                comparisonType: comparisonType
-            });
-
-            // Responsive design
-            const isResponsive = this.formattingSettings.responsiveCard.enable.value;
-            const minChartWidth = this.formattingSettings.responsiveCard.minChartWidth.value;
-            let responsiveBreakpoint = "large";
-            if (isResponsive) {
-                if (width < minChartWidth || height < minChartWidth) responsiveBreakpoint = "small";
-                else if (width < minChartWidth * 2.5 || height < minChartWidth * 2) responsiveBreakpoint = "medium";
-            }
-
-            // Build comprehensive chart settings
-            const fontColor = this.isHighContrast 
-                ? this.highContrastColors!.foreground 
-                : this.formattingSettings.categoriesCard.fontColor.value.value;
-
-            const chartSettings: ChartSettings = {
-                // Core settings
-                invertVariance: this.formattingSettings.chartSettingsCard.invertVariance.value,
-                comparisonType: comparisonType,
-                colors: this.getColors(),
-                
-                // Title settings
-                title: {
-                    show: this.formattingSettings.titleCard.show.value,
-                    text: this.formattingSettings.titleCard.titleText.value || "",
-                    fontSize: this.formattingSettings.titleCard.fontSize.value,
-                    fontColor: this.formattingSettings.titleCard.fontColor.value.value,
-                    alignment: this.formattingSettings.titleCard.alignment.value.value as "left" | "center" | "right"
-                },
-                
-                // Data label settings
-                dataLabels: {
-                    show: this.formattingSettings.dataLabelsCard.show.value,
-                    showValues: this.formattingSettings.dataLabelsCard.showValues.value,
-                    showVariance: this.formattingSettings.dataLabelsCard.showVariance.value,
-                    showPercentage: this.formattingSettings.dataLabelsCard.showPercentage.value,
-                    fontSize: this.formattingSettings.dataLabelsCard.fontSize.value,
-                    decimalPlaces: this.formattingSettings.dataLabelsCard.decimalPlaces.value,
-                    displayUnits: this.formattingSettings.dataLabelsCard.displayUnits.value.value as any,
-                    negativeFormat: String(this.formattingSettings.dataLabelsCard.negativeFormat.value.value) as "minus" | "parentheses",
-                    labelDensity: String(this.formattingSettings.dataLabelsCard.labelDensity.value.value) as "all" | "firstLast" | "minMax" | "none"
-                },
-                
-                // Category settings
-                categories: {
-                    show: this.formattingSettings.categoriesCard.show.value,
-                    fontSize: this.formattingSettings.categoriesCard.fontSize.value,
-                    fontColor: fontColor,
-                    rotation: parseInt(String(this.formattingSettings.categoriesCard.rotation.value.value)) || -45,
-                    maxWidth: this.formattingSettings.categoriesCard.maxWidth.value
-                },
-                
-                // Legend settings
-                legend: {
-                    show: this.formattingSettings.legendCard.show.value,
-                    position: String(this.formattingSettings.legendCard.position.value.value) as "top" | "bottom" | "left" | "right",
-                    fontSize: this.formattingSettings.legendCard.fontSize.value
-                },
-
-                // Comment box settings
-                commentBox: {
-                    show: this.formattingSettings.commentBoxCard.show.value,
-                    showVariance: String(this.formattingSettings.commentBoxCard.showVariance.value.value),
-                    varianceIcon: String(this.formattingSettings.commentBoxCard.varianceIcon.value.value),
-                    padding: this.formattingSettings.commentBoxCard.padding.value,
-                    gap: this.formattingSettings.commentBoxCard.gap.value,
-                    fontSize: this.formattingSettings.commentBoxCard.fontSize.value,
-                    fontColor: this.formattingSettings.commentBoxCard.fontColor.value.value,
-                    markerSize: this.formattingSettings.commentBoxCard.markerSize.value,
-                    markerColor: this.formattingSettings.commentBoxCard.markerColor.value.value
-                },
-                
-                // Difference highlighting
-                highlighting: {
-                    show: this.formattingSettings.differenceHighlightingCard.show.value,
-                    threshold: this.formattingSettings.differenceHighlightingCard.threshold.value,
-                    highlightPositive: this.formattingSettings.differenceHighlightingCard.highlightPositive.value,
-                    highlightNegative: this.formattingSettings.differenceHighlightingCard.highlightNegative.value
-                },
-
-                // Axis break
-                axisBreak: {
-                    show: this.formattingSettings.axisBreakCard.show.value,
-                    breakValue: this.formattingSettings.axisBreakCard.breakValue.value
-                },
-                
-                // Legacy compatibility
-                showVarianceLabels: this.formattingSettings.dataLabelsCard.showVariance.value,
-                showPercentage: this.formattingSettings.dataLabelsCard.showPercentage.value,
-                fontSize: this.formattingSettings.dataLabelsCard.fontSize.value,
-                fontColor: fontColor
-            };
-
-            // Apply responsive overrides
-            if (responsiveBreakpoint === "small") {
-                chartSettings.title.show = false;
-                chartSettings.legend.show = false;
-                chartSettings.dataLabels.show = false;
-                chartSettings.commentBox.show = false;
-                chartSettings.categories.fontSize = Math.min(chartSettings.categories.fontSize, 8);
-                chartSettings.categories.rotation = -90;
-                chartSettings.axisBreak.show = false;
-            } else if (responsiveBreakpoint === "medium") {
-                chartSettings.legend.show = false;
-                chartSettings.commentBox.show = false;
-                chartSettings.dataLabels.fontSize = Math.min(chartSettings.dataLabels.fontSize, 9);
-                chartSettings.categories.fontSize = Math.min(chartSettings.categories.fontSize, 9);
-                chartSettings.title.fontSize = Math.min(chartSettings.title.fontSize, 12);
-            }
-
-            // Build dimensions and layout
-            let dimensions: ChartDimensions;
-            if (this.parsedData.hasGroups && this.parsedData.groups.length > 1) {
-                // Small multiples: compute peripheral space first, then render grid in remaining area
-                if (enableTelemetry) console.log("Rendering Small Multiples", { groups: this.parsedData.groups });
-                dimensions = { width, height, margin: { top: 0, right: 0, bottom: 0, left: 0 } };
-
-                const layoutConfig: LayoutConfig = {
-                    title: { show: chartSettings.title.show },
-                    legend: { show: chartSettings.legend.show, position: chartSettings.legend.position },
-                    commentBox: { show: chartSettings.commentBox.show },
-                    categories: chartSettings.categories,
-                    hasComments: this.parsedData.hasComments,
-                    chartType,
-                    breakpoint: responsiveBreakpoint
-                };
-
-                this.renderSmallMultiples(chartType, chartSettings, layoutConfig, width, height);
-            } else {
-                // Standard chart layout
-                dimensions = this.calculateLayout(width, height, chartType, responsiveBreakpoint);
-                
-                // Create and render chart
-                if (enableTelemetry) console.log("Rendering Standard Chart", { chartType, dimensions });
-                const chart = createChart(chartType, this.chartContainer, this.parsedData, chartSettings, dimensions);
-                chart.render();
-
-                // Add interactivity after rendering (assigns data-index attributes)
-                this.addInteractivity(chartType, comparisonType);
-
-                // Check for cross-highlighting from other visuals (must run after addInteractivity tags elements)
-                const hasHighlights = this.dataView?.categorical?.values?.some(v => v.highlights != null) || false;
-                if (hasHighlights && this.dataView?.categorical?.values) {
-                    const highlights = this.dataView.categorical.values[0]?.highlights;
-                    if (highlights) {
-                        const dpCount = this.parsedData?.dataPoints.length || 1;
-                        this.chartContainer.selectAll("rect[data-index], circle[data-index]").each(function() {
-                            d3.select(this).style("opacity", "0.3");
-                        });
-                        this.chartContainer.selectAll("rect[data-index], circle[data-index]").each(function() {
-                            const el = d3.select(this);
-                            const indexStr = el.attr("data-index");
-                            if (indexStr != null) {
-                                const dpIndex = parseInt(indexStr);
-                                if (dpIndex < highlights.length && highlights[dpIndex] != null) {
-                                    el.style("opacity", "1");
-                                }
-                            }
-                        });
-                    }
-                }
-
-                // Show drill-up button if drilled down
-                if (this.formattingSettings.interactionCard.enableDrilldown.value) {
-                    this.renderDrillUpButton();
-                }
-            }
-
-            // Signal render finished
-            const renderTime = performance.now() - startTime;
-            if (enableTelemetry) {
-                console.log("Render Complete", { totalDurationMs: renderTime.toFixed(2) });
-                console.groupEnd();
-            }
-            this.host.eventService?.renderingFinished(options);
-
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            if (this.formattingSettings?.interactionCard?.enableTelemetry?.value) {
-                console.error("Render Failed:", error);
-                console.groupEnd();
-            }
-            this.host.eventService?.renderingFailed(options, errorMessage);
-            throw error;
+            this.eventService.renderingFailed(options, "Unable to render the visual.");
+            return;
         }
+        this.eventService.renderingFinished(options);
     }
 
-    private createSelectionIds(): void {
-        if (!this.dataView?.categorical?.categories?.[0]) return;
+    private renderUpdate(options: VisualUpdateOptions): void {
+        this.resetCanvas(options.viewport.width, options.viewport.height);
+        this.dataView = options.dataViews?.[0];
 
-        const allCategories = this.dataView.categorical.categories;
-        this.selectionIds = [];
-
-        // Find category and group columns by role
-        let categoryCol: powerbi.DataViewCategoryColumn | null = null;
-        let groupCol: powerbi.DataViewCategoryColumn | null = null;
-
-        for (const cat of allCategories) {
-            const role = cat.source.roles;
-            if (role) {
-                if (role["category"]) categoryCol = cat;
-                if (role["group"]) groupCol = cat;
-            }
-        }
-        // Fallback to first category if no role match
-        if (!categoryCol && allCategories.length > 0) categoryCol = allCategories[0];
-        if (!categoryCol) return;
-
-        for (let i = 0; i < categoryCol.values.length; i++) {
-            let builder = this.host.createSelectionIdBuilder()
-                .withCategory(categoryCol, i);
-            // Include group identity for small multiples selection
-            if (groupCol) {
-                builder = builder.withCategory(groupCol, i);
-            }
-            const selectionId = builder.createSelectionId();
-            this.selectionIds.push(selectionId);
-        }
-    }
-
-    private addInteractivity(chartType: ChartType, comparisonType: ComparisonType): void {
-        const interactionSettings = this.formattingSettings.interactionCard;
-        const self = this;
-        const dataPointCount = this.parsedData?.dataPoints.length || 1;
-
-        // Use data-dp-index set by chart renderers for accurate data point mapping.
-        // For elements without data-dp-index, fall back to sequential data-index tagging.
-        let fallbackIndex = 0;
-        this.chartContainer.selectAll("rect").each(function() {
-            const el = d3.select(this);
-            const fill = el.attr("fill");
-            if (fill && fill !== "none" && fill !== "white" && fill !== "#fff") {
-                // Prefer data-dp-index from chart renderer, copy to data-index for uniform access
-                const dpIndex = el.attr("data-dp-index");
-                if (dpIndex != null) {
-                    el.attr("data-index", dpIndex);
-                } else {
-                    el.attr("data-index", String(fallbackIndex % dataPointCount));
-                    fallbackIndex++;
-                }
-                el.style("cursor", interactionSettings.enableSelection.value ? "pointer" : "default");
-            }
-        });
-
-        this.chartContainer.selectAll("circle").each(function() {
-            const el = d3.select(this);
-            if (el.classed("comment-marker") || el.classed("comment-card-marker")) return;
-            const dpIndex = el.attr("data-dp-index");
-            if (dpIndex != null) {
-                el.attr("data-index", dpIndex);
-            }
-            el.style("cursor", interactionSettings.enableSelection.value ? "pointer" : "default");
-        });
-
-        // Selection click handlers
-        if (interactionSettings.enableSelection.value) {
-            const crossFilterMode = String(interactionSettings.crossFilterMode.value.value);
-
-            this.chartContainer.selectAll("rect[data-index], circle[data-index]")
-                .on("click", function(event: MouseEvent) {
-                    event.stopPropagation();
-                    const indexStr = d3.select(this).attr("data-index");
-                    if (indexStr == null) return;
-                    const dpIndex = parseInt(indexStr);
-                    if (dpIndex >= 0 && dpIndex < self.selectionIds.length) {
-                        const isMultiSelect = event.ctrlKey || event.metaKey;
-                        self.selectionManager.select(self.selectionIds[dpIndex], isMultiSelect)
-                            .then((ids: ISelectionId[]) => {
-                                self.syncSelectionState(ids);
-                            });
-
-                        // Always apply cross-filter so other visuals (including slicers) respond
-                        self.applyCrossFilter(dpIndex, isMultiSelect);
-                    }
-                    // Highlight the matching comment card and marker
-                    self.highlightComment(dpIndex);
-                });
-
-            // Click on empty space to clear selection
-            this.svg.on("click", function(event: MouseEvent) {
-                if ((event.target as Element).tagName === "svg" || 
-                    d3.select(event.target as Element).attr("data-index") == null) {
-                    self.selectionManager.clear().then(() => {
-                        self.syncSelectionState([]);
-                    });
-                    self.highlightComment(-1);
-                    self.clearCrossFilter();
-                }
-            });
-        }
-
-        // Tooltip handlers
-        if (interactionSettings.enableTooltips.value) {
-            this.chartContainer.selectAll("rect[data-index], circle[data-index]")
-                .on("mouseover", function(event: MouseEvent) {
-                    const indexStr = d3.select(this).attr("data-index");
-                    if (indexStr == null) return;
-                    const dpIndex = parseInt(indexStr);
-                    const dp = self.parsedData?.dataPoints[dpIndex];
-                    if (!dp) return;
-
-                    const tooltipData = self.buildTooltipForDataPoint(dp, comparisonType);
-                    self.tooltipService.show({
-                        dataItems: tooltipData,
-                        identities: dpIndex < self.selectionIds.length ? [self.selectionIds[dpIndex]] : [],
-                        coordinates: [event.clientX, event.clientY],
-                        isTouchEvent: false
-                    });
-                })
-                .on("mousemove", function(event: MouseEvent) {
-                    const indexStr = d3.select(this).attr("data-index");
-                    if (indexStr == null) return;
-                    const dpIndex = parseInt(indexStr);
-                    const dp = self.parsedData?.dataPoints[dpIndex];
-                    if (!dp) return;
-
-                    const tooltipData = self.buildTooltipForDataPoint(dp, comparisonType);
-                    self.tooltipService.move({
-                        dataItems: tooltipData,
-                        identities: dpIndex < self.selectionIds.length ? [self.selectionIds[dpIndex]] : [],
-                        coordinates: [event.clientX, event.clientY],
-                        isTouchEvent: false
-                    });
-                })
-                .on("mouseout", function() {
-                    self.tooltipService.hide({
-                        immediately: true,
-                        isTouchEvent: false
-                    });
-                });
-        }
-
-        // Drilldown support
-        if (interactionSettings.enableDrilldown.value) {
-            this.chartContainer.selectAll("rect[data-index], circle[data-index]")
-                .on("dblclick", function(event: MouseEvent) {
-                    event.stopPropagation();
-                    const indexStr = d3.select(this).attr("data-index");
-                    if (indexStr == null) return;
-                    const dpIndex = parseInt(indexStr);
-                    if (dpIndex >= 0 && dpIndex < self.selectionIds.length) {
-                        self.selectionManager.select(self.selectionIds[dpIndex], false);
-                        self.triggerDrill(powerbi.DrillType?.Down ?? 0);
-                    }
-                });
-        }
-    }
-
-    private syncSelectionState(selectionIds: ISelectionId[]): void {
-        const hasSelection = selectionIds.length > 0;
-        this.chartContainer.selectAll("rect[data-index], circle[data-index]").each(function() {
-            const el = d3.select(this);
-            el.style("opacity", hasSelection ? "0.3" : "1");
-        });
-        // Comment markers and cards always stay fully visible
-        this.chartContainer.selectAll(".comment-marker, .comment-marker-text, .comment-card-marker, .comment-box")
-            .style("opacity", "1");
-        // If we have selections, make matching elements opaque
-        if (hasSelection) {
-            const dataPointCount = this.parsedData?.dataPoints.length || 1;
-            const selectedDpIndices = new Set<number>();
-
-            // Build key set from incoming selection IDs for fast lookup
-            const selectedKeys = new Set<string>();
-            for (const sid of selectionIds) {
-                try {
-                    const key = (sid as any).getKey?.();
-                    if (key) selectedKeys.add(key);
-                } catch { /* ignore */ }
-            }
-
-            for (let i = 0; i < this.selectionIds.length; i++) {
-                const myId = this.selectionIds[i];
-                // Try .equals() first (most reliable across update cycles)
-                let matched = false;
-                for (const sid of selectionIds) {
-                    try {
-                        if ((myId as any).equals?.(sid)) { matched = true; break; }
-                    } catch { /* ignore */ }
-                }
-                // Fallback to key comparison
-                if (!matched && selectedKeys.size > 0) {
-                    try {
-                        const myKey = (myId as any).getKey?.();
-                        if (myKey && selectedKeys.has(myKey)) matched = true;
-                    } catch { /* ignore */ }
-                }
-                // Last resort: reference equality
-                if (!matched) {
-                    for (const sid of selectionIds) {
-                        if (myId === sid) { matched = true; break; }
-                    }
-                }
-                if (matched) selectedDpIndices.add(i);
-            }
-
-            this.chartContainer.selectAll("rect[data-index], circle[data-index]").each(function() {
-                const el = d3.select(this);
-                const indexStr = el.attr("data-index");
-                if (indexStr != null) {
-                    const dpIndex = parseInt(indexStr);
-                    if (selectedDpIndices.has(dpIndex)) {
-                        el.style("opacity", "1");
-                        // Add selection indicator stroke for rect elements
-                        if ((el.node() as Element)?.tagName === "rect") {
-                            el.attr("stroke", "#333").attr("stroke-width", "1.5");
-                        }
-                    }
-                }
-            });
-
-            // Show clear-selection button
-            this.renderClearSelectionButton();
-        } else {
-            // Remove selection strokes and clear button
-            this.chartContainer.selectAll("rect[data-index]")
-                .attr("stroke", null).attr("stroke-width", null);
-            this.svg.selectAll(".clear-selection-btn").remove();
-        }
-    }
-
-    private renderClearSelectionButton(): void {
-        this.svg.selectAll(".clear-selection-btn").remove();
-        const self = this;
-        const btn = this.svg.append("g")
-            .attr("class", "clear-selection-btn")
-            .attr("transform", "translate(8, 8)")
-            .style("cursor", "pointer")
-            .on("click", function(event: MouseEvent) {
-                event.stopPropagation();
-                self.selectionManager.clear().then(() => {
-                    self.syncSelectionState([]);
-                });
-                self.highlightComment(-1);
-                const crossFilterMode = String(self.formattingSettings.interactionCard.crossFilterMode.value.value);
-                if (crossFilterMode === "filter") {
-                    self.clearCrossFilter();
-                }
-            });
-        btn.append("rect")
-            .attr("width", 20).attr("height", 20).attr("rx", 3)
-            .attr("fill", "#f5f5f5").attr("stroke", "#ccc");
-        btn.append("text")
-            .attr("x", 10).attr("y", 14)
-            .attr("text-anchor", "middle")
-            .attr("font-size", "13px").attr("fill", "#666")
-            .text("×");
-    }
-
-    /**
-     * Highlight the comment card and marker corresponding to a data point index.
-     * Pass -1 to clear all highlights.
-     */
-    private highlightComment(dataPointIndex: number): void {
-        // Reset all comment markers and cards to default
-        this.chartContainer.selectAll(".comment-marker")
-            .attr("stroke-width", 1.5)
-            .attr("fill", "none");
-        this.chartContainer.selectAll(".comment-card-marker")
-            .attr("stroke-width", 1.5)
-            .attr("fill", "none");
-
-        if (dataPointIndex < 0) return;
-
-        // Highlight matching comment markers on chart
-        this.chartContainer.selectAll(`.comment-marker[data-comment-index="${dataPointIndex}"]`)
-            .attr("stroke-width", 3)
-            .attr("fill", "rgba(26, 115, 232, 0.15)");
-
-        // Highlight matching comment card markers
-        this.chartContainer.selectAll(`.comment-card-marker[data-comment-index="${dataPointIndex}"]`)
-            .attr("stroke-width", 3)
-            .attr("fill", "rgba(26, 115, 232, 0.15)");
-    }
-
-    // ─── Cross-Filter ───
-
-    /** Track selected category values for multi-select cross-filtering */
-    private crossFilterValues: Set<string> = new Set();
-
-    private applyCrossFilter(dpIndex: number, isMultiSelect: boolean): void {
-        const category = this.dataView?.categorical?.categories?.[0];
-        if (!category?.source) return;
-
-        const dp = this.parsedData?.dataPoints[dpIndex];
-        if (!dp) return;
-
-        if (!isMultiSelect) {
-            this.crossFilterValues.clear();
-        }
-        this.crossFilterValues.add(dp.category);
-
-        const queryName = category.source.queryName || "";
-        // queryName format: "Table.Column" or sometimes just "Column"
-        let tableName: string;
-        let columnName: string;
-        const dotIndex = queryName.indexOf(".");
-        if (dotIndex > 0) {
-            tableName = queryName.substring(0, dotIndex);
-            columnName = queryName.substring(dotIndex + 1);
-        } else {
-            // Fallback: use queryName as table and displayName as column
-            tableName = queryName || category.source.displayName || "";
-            columnName = category.source.displayName || "";
-        }
-
-        if (!tableName || !columnName) {
-            console.warn("[Atlyn] Cross-filter: could not determine table/column from queryName:", queryName);
+        if (!this.dataView) {
+            this.renderLandingPage();
             return;
         }
 
-        try {
-            const filter = new BasicFilter(
-                { table: tableName, column: columnName },
-                "In",
-                Array.from(this.crossFilterValues)
-            );
-            (this.host as any).applyJsonFilter(filter, "general", "filter", 1 /* FilterAction.merge */);
-        } catch (e) {
-            console.warn("[Atlyn] Cross-filter failed:", e);
+        this.formattingSettings = this.formattingSettingsService.populateFormattingSettingsModel(
+            VisualFormattingSettingsModel,
+            this.dataView
+        );
+        this.applyThemeDefaults(this.dataView);
+        this.restoreFilterState(options.jsonFilters);
+
+        this.parsedData = parseDataView(this.dataView, this.host.locale);
+        if (!this.parsedData || this.parsedData.dataPoints.length === 0) {
+            this.renderLandingPage();
+            return;
+        }
+        if (!this.parsedData.hasActual) {
+            this.renderNoData("Add at least one finite Actual value.");
+            return;
+        }
+
+        this.createSelectionIds();
+        const chartType = this.getChartType();
+        let comparisonType = this.getComparisonType();
+
+        if (!this.hasComparisonData(this.parsedData, comparisonType)) {
+            const available = getAvailableComparisonType(this.parsedData, comparisonType);
+            if (available) {
+                comparisonType = available;
+            } else if (["variance", "waterfall", "lollipop", "dot"].includes(chartType)) {
+                this.renderNoData("Add Plan, Previous Year, or Forecast for variance analysis.");
+                return;
+            }
+        }
+
+        const topN = this.formattingSettings.topNCard;
+        this.parsedData = applyTopN(this.parsedData, {
+            enable: topN.enable.value,
+            count: finiteSetting(topN.count.value, 10, 0, 1000),
+            sortBy: enumSetting(topN.sortBy.value.value, ["value", "name", "variance"], "value"),
+            sortDirection: enumSetting(topN.sortDirection.value.value, ["asc", "desc"], "desc"),
+            showOthers: topN.showOthers.value,
+            othersLabel: topN.othersLabel.value || "Others",
+            comparisonType
+        });
+        if (this.parsedData.dataPoints.length === 0) {
+            this.renderNoData("Top N settings exclude all categories.");
+            return;
+        }
+
+        const viewportWidth = finiteDimension(options.viewport.width);
+        const viewportHeight = finiteDimension(options.viewport.height);
+        const content = this.getContentDimensions(viewportWidth, viewportHeight);
+        this.svg.attr("width", content.width).attr("height", content.height);
+
+        const settings = this.buildChartSettings(comparisonType);
+        const renderedDomain = getChartValueDomain(
+            chartType,
+            this.parsedData,
+            comparisonType,
+            settings.invertVariance
+        );
+        settings.displayUnitReference = Math.max(Math.abs(renderedDomain[0]), Math.abs(renderedDomain[1]));
+        const breakpoint = this.getResponsiveBreakpoint(viewportWidth, viewportHeight);
+        this.applyResponsiveSettings(settings, breakpoint);
+
+        if (this.parsedData.hasGroups && this.parsedData.groups.length > 1) {
+            const layoutConfig = this.createLayoutConfig(chartType, settings, breakpoint);
+            this.renderSmallMultiples(chartType, settings, layoutConfig, content.width, content.height);
+        } else {
+            const dimensions = this.calculateLayout(content.width, content.height, chartType, settings, breakpoint);
+            createChart(chartType, this.chartContainer, this.parsedData, settings, dimensions).render();
+        }
+        if (this.allowInteractions() && this.formattingSettings.interactionCard.enableDrilldown.value) {
+            this.renderDrillUpButton();
+        }
+
+        this.decorateRenderedContent();
+        this.addInteractivity(comparisonType);
+        if (this.getInteractionMode() === "highlight") {
+            this.syncSelectionState(this.selectionManager.getSelectionIds().filter(isVisualSelectionId));
+        } else {
+            this.syncFilterState();
         }
     }
 
-    private clearCrossFilter(): void {
-        this.crossFilterValues.clear();
-        try {
-            (this.host as any).applyJsonFilter(null, "general", "filter", 0 /* FilterAction.remove */);
-        } catch (e) {
-            console.warn("[Atlyn] Clear cross-filter failed:", e);
-        }
+    private resetCanvas(width: number, height: number): void {
+        const safeWidth = finiteDimension(width);
+        const safeHeight = finiteDimension(height);
+        this.chartContainer.selectAll("*").remove();
+        this.svg.selectAll(".clear-selection-btn").remove();
+        this.chartContainer.attr("transform", null);
+        this.svg
+            .classed("landing", false)
+            .attr("width", safeWidth)
+            .attr("height", safeHeight)
+            .attr("viewBox", null)
+            .attr("tabindex", 0)
+            .attr("aria-label", "Atlyn Variance Chart");
+        this.selectionIds = [];
+        this.parsedData = null;
+        this.statusRegion.textContent = "";
+        this.target.scrollLeft = 0;
+        this.target.scrollTop = 0;
     }
 
-    // ─── Drill ───
+    private getContentDimensions(width: number, height: number): { width: number; height: number } {
+        if (!this.parsedData) return { width, height };
+        const minChartWidth = finiteSetting(
+            this.formattingSettings.responsiveCard.minChartWidth.value,
+            150,
+            40,
+            10_000
+        );
+        const denseWidth = this.parsedData.dataPoints.length * 36 + 100;
+        const contentWidth = Math.max(width, denseWidth > width ? denseWidth : width);
 
-    private triggerDrill(drillType: number): void {
-        try {
-            (this.host as any).drill?.({
-                roleName: "category",
-                drillType: drillType
-            });
-        } catch (e) {
-            console.warn("[Atlyn] Drill failed:", e);
+        if (!this.parsedData.hasGroups || this.parsedData.groups.length < 2) {
+            return { width: contentWidth, height };
         }
+
+        const requestedColumns = Math.floor(this.formattingSettings.smallMultiplesCard.columns.value);
+        const columns = requestedColumns > 0
+            ? Math.min(requestedColumns, this.parsedData.groups.length)
+            : Math.max(1, Math.floor(Math.max(width, minChartWidth) / minChartWidth));
+        const rows = Math.ceil(this.parsedData.groups.length / columns);
+        return {
+            width: Math.max(width, columns * minChartWidth),
+            height: Math.max(height, rows * 170)
+        };
     }
 
-    /**
-     * Render a drill-up button when the visual is in a drilled-down state.
-     * Detects drill state by checking if category hierarchy depth > 1.
-     */
-    private renderDrillUpButton(): void {
-        const category = this.dataView?.categorical?.categories?.[0];
-        if (!category?.source) return;
+    private applyThemeDefaults(dataView?: DataView): void {
+        const palette = this.host.colorPalette;
+        const color = (key: string, fallback: string): string =>
+            typeof palette.getColor === "function" ? palette.getColor(key).value : fallback;
+        const hasValue = (objectName: string, propertyName: string): boolean =>
+            dataView?.metadata?.objects?.[objectName]?.[propertyName] !== undefined;
 
-        // Check if drillable — the category must have drill roles defined
-        const metadata = this.dataView?.metadata;
-        const drillableRoles = (metadata as any)?.dataRoles?.drillableRoles;
-        // Also check if category level > 0 (meaning we've drilled into something)
-        const categoryLevel = (category.source as any).roles?.category ? 
-            Object.keys(category.source as any).length : 0;
+        this.foreground = palette.foreground?.value ?? "#333333";
+        this.background = palette.background?.value ?? "#ffffff";
+        this.selectionColor = palette.selection?.value ?? palette.foregroundSelected?.value ?? this.foreground;
 
-        // A simple heuristic: if the queryName contains multiple dots or 
-        // if there are grouping levels, we're likely drilled down
-        const queryName = category.source.queryName || "";
-        const isDrilledDown = queryName.split(".").length > 2;
+        const setColor = (
+            objectName: string,
+            propertyName: string,
+            slice: { value: { value: string } },
+            fallback: string
+        ): void => {
+            if (!hasValue(objectName, propertyName)) slice.value.value = fallback;
+        };
 
-        if (!isDrilledDown && !drillableRoles) return;
-        if (!isDrilledDown) return;
+        setColor("title", "fontColor", this.formattingSettings.titleCard.fontColor, this.foreground);
+        setColor("categories", "fontColor", this.formattingSettings.categoriesCard.fontColor, this.foreground);
+        setColor("commentBox", "fontColor", this.formattingSettings.commentBoxCard.fontColor, this.foreground);
+        setColor("commentBox", "markerColor", this.formattingSettings.commentBoxCard.markerColor, this.selectionColor);
+        setColor("design", "actualColor", this.formattingSettings.designCard.actualColor, color("Actual", "#404040"));
+        setColor("design", "budgetColor", this.formattingSettings.designCard.budgetColor, color("Plan", "#808080"));
+        setColor("design", "previousYearColor", this.formattingSettings.designCard.previousYearColor, color("Previous Year", "#9e9e9e"));
+        setColor("design", "forecastColor", this.formattingSettings.designCard.forecastColor, color("Forecast", "#606060"));
+        setColor("design", "positiveVarianceColor", this.formattingSettings.designCard.positiveVarianceColor, palette.positive?.value ?? color("Positive variance", "#4caf50"));
+        setColor("design", "negativeVarianceColor", this.formattingSettings.designCard.negativeVarianceColor, palette.negative?.value ?? color("Negative variance", "#f44336"));
 
-        const self = this;
-        const drillUpGroup = this.chartContainer.append("g")
-            .attr("class", "drill-up-button")
-            .attr("transform", "translate(0, -10)")
-            .style("cursor", "pointer")
-            .on("click", function() {
-                self.triggerDrill(1 /* DrillType.Up */);
-            });
-
-        drillUpGroup.append("text")
-            .attr("x", 0)
-            .attr("y", 0)
-            .attr("font-size", "11px")
-            .attr("fill", "#1a73e8")
-            .text("↑ Drill Up");
+        this.target.style.setProperty("--atlyn-foreground", this.foreground);
+        this.target.style.setProperty("--atlyn-background", this.background);
+        this.target.style.setProperty("--atlyn-selection", this.selectionColor);
     }
 
-    private buildTooltipForDataPoint(dp: DataPoint, comparisonType: ComparisonType): VisualTooltipDataItem[] {
-        const tooltipItems: VisualTooltipDataItem[] = [
-            { displayName: "Category", value: dp.category },
-            { displayName: "Actual", value: formatNumber(dp.actual, { scale: "auto" }) }
-        ];
-
-        if (this.parsedData?.hasBudget) {
-            tooltipItems.push(
-                { displayName: "Budget", value: formatNumber(dp.budget, { scale: "auto" }) },
-                { displayName: "Variance to Budget", value: `${dp.varianceToBudget >= 0 ? "+" : ""}${formatNumber(dp.varianceToBudget, { scale: "auto" })} (${dp.varianceToBudgetPct.toFixed(1)}%)` }
-            );
-        }
-        if (this.parsedData?.hasPreviousYear) {
-            tooltipItems.push(
-                { displayName: "Previous Year", value: formatNumber(dp.previousYear, { scale: "auto" }) },
-                { displayName: "YoY Change", value: `${dp.varianceToPY >= 0 ? "+" : ""}${formatNumber(dp.varianceToPY, { scale: "auto" })} (${dp.varianceToPYPct.toFixed(1)}%)` }
-            );
-        }
-        if (this.parsedData?.hasForecast) {
-            tooltipItems.push(
-                { displayName: "Forecast", value: formatNumber(dp.forecast, { scale: "auto" }) }
-            );
-        }
-        if (dp.tooltipFields && dp.tooltipFields.length > 0) {
-            tooltipItems.push(...dp.tooltipFields.map((field) => ({
-                displayName: field.displayName,
-                value: field.value
-            })));
-        }
-        if (dp.comment) {
-            tooltipItems.push({ displayName: "Comment", value: dp.comment });
-        }
-
-        return tooltipItems;
+    private getChartType(): ChartType {
+        return enumSetting(
+            this.formattingSettings.chartSettingsCard.chartType.value.value,
+            CHART_TYPES,
+            "variance"
+        );
     }
 
-    private hasComparisonData(data: ParsedData, comparisonType: ComparisonType): boolean {
-        switch (comparisonType) {
-            case "budget": return data.hasBudget;
-            case "previousYear": return data.hasPreviousYear;
-            case "forecast": return data.hasForecast;
-            default: return data.hasBudget;
-        }
+    private getComparisonType(): ComparisonType {
+        return enumSetting(
+            this.formattingSettings.chartSettingsCard.comparisonType.value.value,
+            ["budget", "previousYear", "forecast"],
+            "budget"
+        );
     }
 
-    private getAvailableComparisonType(data: ParsedData): ComparisonType | null {
-        // Priority: Previous Year > Plan > Forecast
-        if (data.hasPreviousYear) return "previousYear";
-        if (data.hasBudget) return "budget";
-        if (data.hasForecast) return "forecast";
-        return null;
+    private getInteractionMode(): "highlight" | "filter" {
+        return String(this.formattingSettings.interactionCard.crossFilterMode.value.value) === "filter"
+            ? "filter"
+            : "highlight";
     }
 
-    private getComparisonLabel(comparisonType: ComparisonType): string {
-        switch (comparisonType) {
-            case "previousYear": return "Previous Year";
-            case "forecast": return "Forecast";
-            default: return "Budget/Plan";
-        }
+    private allowInteractions(): boolean {
+        return this.host.hostCapabilities?.allowInteractions !== false;
     }
 
-    private calculateLayout(width: number, height: number, chartType: ChartType, breakpoint: string = "large"): ChartDimensions {
-        const enableTelemetry = this.formattingSettings.interactionCard.enableTelemetry.value;
+    private getResponsiveBreakpoint(width: number, height: number): string {
+        if (!this.formattingSettings.responsiveCard.enable.value) return "large";
+        const minimum = finiteSetting(
+            this.formattingSettings.responsiveCard.minChartWidth.value,
+            150,
+            1,
+            10_000
+        );
+        if (width < minimum || height < minimum) return "small";
+        if (width < minimum * 2.5 || height < minimum * 2) return "medium";
+        return "large";
+    }
 
-        const config: LayoutConfig = {
-            title: { show: this.formattingSettings.titleCard.show.value },
-            legend: {
-                show: this.formattingSettings.legendCard.show.value,
-                position: String(this.formattingSettings.legendCard.position.value.value) as any
+    private buildChartSettings(comparisonType: ComparisonType): ChartSettings {
+        const labels = this.formattingSettings.dataLabelsCard;
+        const categories = this.formattingSettings.categoriesCard;
+        const legendPosition = enumSetting(
+            this.formattingSettings.legendCard.position.value.value,
+            ["top", "bottom", "left", "right"],
+            "right"
+        ) as LegendPosition;
+        const displayUnits = enumSetting<NumberScale>(
+            labels.displayUnits.value.value,
+            ["auto", "none", "thousands", "millions", "billions"],
+            "auto"
+        );
+
+        return {
+            invertVariance: this.formattingSettings.chartSettingsCard.invertVariance.value,
+            comparisonType,
+            colors: this.getColors(),
+            foreground: this.foreground,
+            background: this.background,
+            highContrast: this.host.colorPalette.isHighContrast === true,
+            locale: this.host.locale,
+            title: {
+                show: this.formattingSettings.titleCard.show.value,
+                text: this.formattingSettings.titleCard.titleText.value || "",
+                fontSize: finiteSetting(this.formattingSettings.titleCard.fontSize.value, 14, 0, 200),
+                fontColor: this.host.colorPalette.isHighContrast
+                    ? this.foreground
+                    : this.formattingSettings.titleCard.fontColor.value.value,
+                alignment: enumSetting(
+                    this.formattingSettings.titleCard.alignment.value.value,
+                    ["left", "center", "right"],
+                    "left"
+                )
             },
-            commentBox: {
-                show: this.formattingSettings.commentBoxCard.show.value
+            dataLabels: {
+                show: labels.show.value,
+                showValues: labels.showValues.value,
+                showVariance: labels.showVariance.value,
+                showPercentage: labels.showPercentage.value,
+                fontSize: finiteSetting(labels.fontSize.value, 10, 0, 200),
+                decimalPlaces: Math.floor(finiteSetting(labels.decimalPlaces.value, 1, 0, 20)),
+                displayUnits,
+                negativeFormat: enumSetting<"minus" | "parentheses">(
+                    labels.negativeFormat.value.value,
+                    ["minus", "parentheses"],
+                    "minus"
+                ),
+                labelDensity: enumSetting(
+                    labels.labelDensity.value.value,
+                    ["all", "firstLast", "minMax", "none"],
+                    "all"
+                )
             },
             categories: {
-                show: this.formattingSettings.categoriesCard.show.value,
-                rotation: parseInt(String(this.formattingSettings.categoriesCard.rotation.value.value)) || -45,
-                maxWidth: this.formattingSettings.categoriesCard.maxWidth.value,
-                fontSize: this.formattingSettings.categoriesCard.fontSize.value
+                show: categories.show.value,
+                fontSize: finiteSetting(categories.fontSize.value, 10, 0, 200),
+                fontColor: this.host.colorPalette.isHighContrast
+                    ? this.foreground
+                    : categories.fontColor.value.value,
+                rotation: finiteSetting(
+                    Number.parseInt(String(categories.rotation.value.value), 10),
+                    0,
+                    -90,
+                    90
+                ),
+                maxWidth: finiteSetting(categories.maxWidth.value, 100, 0, 1000)
             },
-            hasComments: this.parsedData?.hasComments || false,
+            legend: {
+                show: this.formattingSettings.legendCard.show.value,
+                position: legendPosition,
+                fontSize: finiteSetting(this.formattingSettings.legendCard.fontSize.value, 10, 0, 200)
+            },
+            commentBox: {
+                show: this.formattingSettings.commentBoxCard.show.value,
+                showVariance: enumSetting(
+                    this.formattingSettings.commentBoxCard.showVariance.value.value,
+                    ["none", "absolute", "relative", "both"],
+                    "relative"
+                ),
+                varianceIcon: enumSetting(
+                    this.formattingSettings.commentBoxCard.varianceIcon.value.value,
+                    ["none", "triangle", "circle", "arrow"],
+                    "triangle"
+                ),
+                padding: finiteSetting(this.formattingSettings.commentBoxCard.padding.value, 6, 0, 500),
+                gap: finiteSetting(this.formattingSettings.commentBoxCard.gap.value, 8, 0, 500),
+                fontSize: finiteSetting(this.formattingSettings.commentBoxCard.fontSize.value, 10, 0, 200),
+                fontColor: this.host.colorPalette.isHighContrast
+                    ? this.foreground
+                    : this.formattingSettings.commentBoxCard.fontColor.value.value,
+                markerSize: finiteSetting(this.formattingSettings.commentBoxCard.markerSize.value, 18, 0, 500),
+                markerColor: this.host.colorPalette.isHighContrast
+                    ? this.foreground
+                    : this.formattingSettings.commentBoxCard.markerColor.value.value
+            },
+            highlighting: {
+                show: this.formattingSettings.differenceHighlightingCard.show.value,
+                threshold: finiteSetting(
+                    this.formattingSettings.differenceHighlightingCard.threshold.value,
+                    10,
+                    0,
+                    Number.MAX_VALUE
+                ),
+                highlightPositive: this.formattingSettings.differenceHighlightingCard.highlightPositive.value,
+                highlightNegative: this.formattingSettings.differenceHighlightingCard.highlightNegative.value
+            },
+            axisBreak: {
+                show: this.formattingSettings.axisBreakCard.show.value,
+                breakValue: finiteSetting(
+                    this.formattingSettings.axisBreakCard.breakValue.value,
+                    0,
+                    -Number.MAX_VALUE,
+                    Number.MAX_VALUE
+                )
+            },
+            showVarianceLabels: labels.showVariance.value,
+            showPercentage: labels.showPercentage.value,
+            fontSize: finiteSetting(labels.fontSize.value, 10, 0, 200),
+            fontColor: this.foreground
+        };
+    }
+
+    private applyResponsiveSettings(settings: ChartSettings, breakpoint: string): void {
+        if (breakpoint === "small") {
+            settings.title.show = false;
+            settings.legend.show = false;
+            settings.dataLabels.show = false;
+            settings.commentBox.show = false;
+            settings.categories.fontSize = Math.min(settings.categories.fontSize, 8);
+            settings.categories.rotation = -90;
+            settings.axisBreak.show = false;
+        } else if (breakpoint === "medium") {
+            settings.legend.show = false;
+            settings.commentBox.show = false;
+            settings.dataLabels.fontSize = Math.min(settings.dataLabels.fontSize, 9);
+            settings.categories.fontSize = Math.min(settings.categories.fontSize, 9);
+            settings.title.fontSize = Math.min(settings.title.fontSize, 12);
+        }
+    }
+
+    private createLayoutConfig(
+        chartType: ChartType,
+        settings: ChartSettings,
+        breakpoint: string
+    ): LayoutConfig {
+        return {
+            title: { show: settings.title.show },
+            legend: { show: settings.legend.show, position: settings.legend.position },
+            commentBox: { show: settings.commentBox.show },
+            categories: settings.categories,
+            hasComments: this.parsedData?.hasComments ?? false,
             chartType,
             breakpoint
         };
-
-        const result = calculateLayoutEngine(width, height, config);
-
-        // Telemetry
-        if (enableTelemetry) {
-            console.log("[Atlyn Variance Chart] Layout Telemetry:", {
-                viewport: { width, height },
-                config,
-                margins: result.margin,
-                layoutAreas: result.layout,
-                chartWidth: width - result.margin.left - result.margin.right,
-                chartHeight: height - result.margin.top - result.margin.bottom
-            });
-        }
-
-        return result;
     }
 
-    private renderSmallMultiples(chartType: ChartType, chartSettings: ChartSettings, layoutConfig: LayoutConfig, totalWidth: number, totalHeight: number): void {
-        const groups = this.parsedData.groups;
-        const smSettings = this.formattingSettings.smallMultiplesCard;
-        const enableTelemetry = this.formattingSettings.interactionCard.enableTelemetry.value;
+    private calculateLayout(
+        width: number,
+        height: number,
+        chartType: ChartType,
+        settings: ChartSettings,
+        breakpoint: string
+    ): ChartDimensions {
+        return calculateLayoutEngine(
+            width,
+            height,
+            this.createLayoutConfig(chartType, settings, breakpoint)
+        );
+    }
 
-        // Compute viewport for grid after peripherals carve their space
-        const vp = getSmallMultiplesViewport(totalWidth, totalHeight, layoutConfig);
-
-        const smConfig: SmallMultiplesConfig = {
-            columns: smSettings.columns.value,
-            spacing: smSettings.spacing.value,
-            showHeaders: smSettings.showHeaders.value,
-            categoryRotation: parseInt(String(this.formattingSettings.categoriesCard.rotation.value.value)) || -45,
-            categoryMaxWidth: this.formattingSettings.categoriesCard.maxWidth.value,
-            categoryFontSize: this.formattingSettings.categoriesCard.fontSize.value,
+    private renderSmallMultiples(
+        chartType: ChartType,
+        settings: ChartSettings,
+        layoutConfig: LayoutConfig,
+        totalWidth: number,
+        totalHeight: number
+    ): void {
+        if (!this.parsedData) return;
+        const groupKeys = getGroupKeys(this.parsedData);
+        const multipleSettings = this.formattingSettings.smallMultiplesCard;
+        const layout = calculateLayoutEngine(totalWidth, totalHeight, layoutConfig).layout;
+        const viewport = layout?.chartArea
+            ?? getSmallMultiplesViewport(totalWidth, totalHeight, layoutConfig);
+        const config: SmallMultiplesConfig = {
+            columns: Math.floor(finiteSetting(
+                multipleSettings.columns.value,
+                0,
+                0,
+                Math.max(1, groupKeys.length)
+            )),
+            spacing: finiteSetting(multipleSettings.spacing.value, 10, 0, 500),
+            showHeaders: multipleSettings.showHeaders.value,
+            categoryRotation: settings.categories.rotation,
+            categoryMaxWidth: settings.categories.maxWidth,
+            categoryFontSize: settings.categories.fontSize
         };
+        const grid = calculateSmallMultiplesGrid(
+            Math.max(0, viewport.width),
+            Math.max(0, viewport.height),
+            groupKeys.length,
+            config
+        );
 
-        const grid = calculateSmallMultiplesGrid(vp.width, vp.height, groups.length, smConfig);
+        const scaleMode = enumSetting(
+            multipleSettings.scaleMode.value.value,
+            ["shared", "independent"] as const,
+            "shared"
+        );
+        const sharedDomain = scaleMode === "shared"
+            ? getChartValueDomain(chartType, this.parsedData, settings.comparisonType, settings.invertVariance)
+            : undefined;
 
-        if (enableTelemetry) {
-            console.group("Small Multiples Layout");
-            console.log("Viewport (after peripherals)", vp);
-            console.log("Grid Config", grid);
-        }
-
-        // Find shared scale if needed
-        const scaleMode = String(smSettings.scaleMode.value.value);
-        let sharedMax = 0;
-        if (scaleMode === "shared") {
-            this.parsedData.dataPoints.forEach(d => {
-                sharedMax = Math.max(sharedMax, d.actual, d.budget, d.previousYear, d.forecast);
-            });
-        }
-
-        groups.forEach((group, i) => {
-            const cell = calculateCellLayout(grid, i, smConfig);
-
-            if (enableTelemetry) {
-                console.log(`Cell [${i}] (${group})`, cell);
-            }
-
-            // Filter data for this group
-            const groupData: ParsedData = {
-                ...this.parsedData,
-                dataPoints: this.parsedData.dataPoints.filter(d => d.group === group),
-                maxValue: sharedMax > 0 ? sharedMax : undefined
-            };
-
-            // Nested <svg> creates an isolated, clipped viewport
-            // Position is offset by the peripheral viewport origin
+        groupKeys.forEach((groupKey, index) => {
+            if (!this.parsedData) return;
+            const cell = calculateCellLayout(grid, index, config);
+            const groupPoints = this.parsedData.dataPoints.filter(
+                point => getDataPointGroupKey(point) === groupKey
+            );
+            const groupLabel = groupPoints[0]?.group ?? "";
+            const groupData = subsetParsedData(
+                this.parsedData,
+                groupPoints
+            );
             const cellSvg = this.chartContainer.append("svg")
-                .attr("x", vp.x + cell.x)
-                .attr("y", vp.y + cell.y)
-                .attr("width", grid.cellWidth)
-                .attr("height", grid.cellHeight)
+                .attr("x", viewport.x + cell.x)
+                .attr("y", viewport.y + cell.y)
+                .attr("width", Math.max(0, grid.cellWidth))
+                .attr("height", Math.max(0, grid.cellHeight))
                 .attr("overflow", "hidden");
 
-            // Header
-            if (smConfig.showHeaders) {
+            if (config.showHeaders) {
                 cellSvg.append("text")
-                    .attr("x", grid.cellWidth / 2)
+                    .attr("class", "small-multiple-header")
+                    .attr("x", Math.max(0, grid.cellWidth) / 2)
                     .attr("y", 14)
                     .attr("text-anchor", "middle")
                     .attr("font-size", "11px")
                     .attr("font-weight", "bold")
-                    .attr("fill", "#333")
-                    .text(group);
+                    .attr("fill", this.foreground)
+                    .text(groupLabel);
             }
 
-            // Chart group within the nested SVG
-            const chartGroup = cellSvg.append("g")
-                .attr("transform", `translate(0, ${cell.headerHeight})`) as any as d3.Selection<SVGGElement, unknown, null, undefined>;
-
-            const cellDimensions: ChartDimensions = {
-                width: grid.cellWidth,
-                height: grid.cellHeight - cell.headerHeight,
-                margin: cell.margin
+            const chartViewport = cellSvg.append("g")
+                .attr("transform", `translate(0, ${Math.max(0, cell.headerHeight)})`);
+            const chartGroup = chartViewport.append("g");
+            const dimensions: ChartDimensions = {
+                width: Math.max(0, grid.cellWidth),
+                height: Math.max(0, grid.cellHeight - cell.headerHeight),
+                margin: {
+                    top: Math.max(0, cell.margin.top),
+                    right: Math.max(0, cell.margin.right),
+                    bottom: Math.max(0, cell.margin.bottom),
+                    left: Math.max(0, cell.margin.left)
+                }
             };
-
-            // Disable legend/comments/title in small multiples cells (rendered at outer level)
             const cellSettings: ChartSettings = {
-                ...chartSettings,
-                legend: { ...chartSettings.legend, show: false },
-                commentBox: { ...chartSettings.commentBox, show: false },
-                title: { ...chartSettings.title, show: false },
-                axisBreak: { ...chartSettings.axisBreak, show: false }
+                ...settings,
+                legend: { ...settings.legend, show: false },
+                commentBox: { ...settings.commentBox, show: false },
+                title: { ...settings.title, show: false },
+                axisBreak: { ...settings.axisBreak, show: false },
+                sharedValueDomain: sharedDomain
             };
-
-            const chart = createChart(chartType, chartGroup, groupData, cellSettings, cellDimensions);
-            chart.render();
+            createChart(chartType, chartGroup, groupData, cellSettings, dimensions).render();
         });
 
-        // Render outer-level title
-        if (chartSettings.title.show && chartSettings.title.text) {
-            const titleX = chartSettings.title.alignment === "center" ? totalWidth / 2
-                : chartSettings.title.alignment === "right" ? totalWidth - 10 : 10;
-            const anchor = chartSettings.title.alignment === "center" ? "middle"
-                : chartSettings.title.alignment === "right" ? "end" : "start";
-            this.chartContainer.append("text")
-                .attr("class", "chart-title")
-                .attr("x", titleX)
-                .attr("y", 20)
-                .attr("text-anchor", anchor)
-                .attr("font-size", `${chartSettings.title.fontSize}px`)
-                .attr("font-weight", "bold")
-                .attr("fill", chartSettings.title.fontColor)
-                .text(chartSettings.title.text);
-        }
+        this.renderSmallMultiplesTitle(settings, totalWidth);
+        this.renderSmallMultiplesLegend(chartType, settings, layout?.legendArea);
+        this.renderSmallMultiplesComments(settings, layout?.commentBoxArea);
+    }
 
-        // Render outer-level legend
-        if (chartSettings.legend.show) {
-            const legendItems = this.buildLegendItems(chartType, chartSettings);
-            const legendGroup = this.chartContainer.append("g").attr("class", "legend");
-            const pos = chartSettings.legend.position;
-            let lx: number, ly: number;
-            if (pos === "right") {
-                lx = vp.x + vp.width + 10;
-                ly = vp.y + 10;
-            } else if (pos === "left") {
-                lx = 5;
-                ly = vp.y + 10;
-            } else if (pos === "top") {
-                lx = totalWidth / 2 - (legendItems.length * 70) / 2;
-                ly = vp.y - 20;
-            } else {
-                lx = totalWidth / 2 - (legendItems.length * 70) / 2;
-                ly = vp.y + vp.height + 5;
+    private renderSmallMultiplesTitle(settings: ChartSettings, totalWidth: number): void {
+        if (!settings.title.show || !settings.title.text) return;
+        const x = settings.title.alignment === "center"
+            ? totalWidth / 2
+            : settings.title.alignment === "right" ? totalWidth - 10 : 10;
+        this.chartContainer.append("text")
+            .attr("class", "chart-title")
+            .attr("x", x)
+            .attr("y", 20)
+            .attr("text-anchor", settings.title.alignment === "center" ? "middle" : settings.title.alignment === "right" ? "end" : "start")
+            .attr("font-size", `${settings.title.fontSize}px`)
+            .attr("font-weight", "bold")
+            .attr("fill", settings.title.fontColor)
+            .text(settings.title.text);
+    }
+
+    private renderSmallMultiplesLegend(
+        chartType: ChartType,
+        settings: ChartSettings,
+        area?: LayoutRect
+    ): void {
+        if (!settings.legend.show || !area) return;
+        const items = this.buildLegendItems(chartType, settings);
+        const legend = this.chartContainer.append("g").attr("class", "legend");
+        const horizontal = settings.legend.position === "top" || settings.legend.position === "bottom";
+        const x = horizontal
+            ? area.x + Math.max(0, (area.width - items.length * 70) / 2)
+            : area.x + 5;
+        const y = area.y + 10;
+        legend.attr("transform", `translate(${x}, ${y})`);
+        items.forEach((item, index) => {
+            const itemX = horizontal ? index * 70 : 0;
+            const itemY = horizontal ? 0 : index * 20;
+            legend.append("rect")
+                .attr("x", itemX)
+                .attr("y", itemY)
+                .attr("width", 12)
+                .attr("height", 12)
+                .attr("fill", item.outlined ? "none" : item.color)
+                .attr("stroke", item.color)
+                .attr("stroke-width", item.outlined ? 2 : 1)
+                .attr("stroke-dasharray", item.outlined ? "3,1" : null);
+            legend.append("text")
+                .attr("x", itemX + 18)
+                .attr("y", itemY + 10)
+                .attr("font-size", `${settings.legend.fontSize}px`)
+                .attr("fill", this.foreground)
+                .text(item.label);
+        });
+    }
+
+    private renderSmallMultiplesComments(
+        settings: ChartSettings,
+        area?: LayoutRect
+    ): void {
+        if (!this.parsedData || !settings.commentBox.show || !this.parsedData.hasComments || !area) return;
+        const comments = this.parsedData.dataPoints.filter(point => point.comment.trim() !== "");
+        if (comments.length === 0) return;
+        const x = area.x + 10;
+        const y = area.y;
+        const width = Math.max(0, area.width - 20);
+        const height = Math.max(0, area.height);
+        if (width === 0 || height === 0) return;
+        const box = this.chartContainer.append("foreignObject")
+            .attr("class", "comment-box")
+            .attr("x", x)
+            .attr("y", y)
+            .attr("width", width)
+            .attr("height", height);
+        const scroll = box.append("xhtml:div")
+            .attr("role", "region")
+            .attr("aria-label", "Chart comments")
+            .attr("tabindex", 0)
+            .style("width", `${width}px`)
+            .style("height", `${height}px`)
+            .style("overflow-y", "auto")
+            .style("color", this.foreground)
+            .style("background", this.background)
+            .style("box-sizing", "border-box");
+
+        comments.forEach((point, index) => {
+            const variance = getVariance(point, settings.comparisonType);
+            const percentage = getVariancePct(point, settings.comparisonType);
+            const displayedVariance = variance === null ? null : settings.invertVariance ? -variance : variance;
+            const displayedPercentage = percentage === null ? null : settings.invertVariance ? -percentage : percentage;
+            const card = scroll.append("xhtml:div")
+                .style("display", "flex")
+                .style("gap", `${settings.commentBox.padding}px`)
+                .style("margin-bottom", `${settings.commentBox.gap}px`)
+                .style("padding", `${settings.commentBox.padding}px 0`);
+            card.append("xhtml:div")
+                .attr("class", "comment-card-marker")
+                .attr("data-comment-source", point.sourceIndices.join(","))
+                .style("min-width", `${settings.commentBox.markerSize}px`)
+                .style("height", `${settings.commentBox.markerSize}px`)
+                .style("border", `2px solid ${settings.commentBox.markerColor}`)
+                .style("border-radius", "50%")
+                .style("text-align", "center")
+                .style("color", settings.commentBox.markerColor)
+                .text(String(index + 1));
+            const content = card.append("xhtml:div");
+            content.append("xhtml:div")
+                .style("font-weight", "bold")
+                .style("color", settings.commentBox.fontColor)
+                .text(point.group ? `${point.group}, ${point.category}` : point.category);
+            const value = this.formatMeasure(point.actual, "actual");
+            let varianceText = "";
+            if (
+                displayedVariance !== null
+                && (settings.commentBox.showVariance === "absolute" || settings.commentBox.showVariance === "both")
+            ) {
+                varianceText += ` ${this.formatMeasure(displayedVariance, "actual")}`;
             }
-            legendGroup.attr("transform", `translate(${lx}, ${ly})`);
+            if (
+                displayedPercentage !== null
+                && (settings.commentBox.showVariance === "relative" || settings.commentBox.showVariance === "both")
+            ) {
+                varianceText += ` ${formatPercent(displayedPercentage, 1, true, this.host.locale)}`;
+            }
+            const valueLine = content.append("xhtml:div")
+                .style("color", this.foreground)
+                .text(`${value}${varianceText}`);
+            if (
+                settings.commentBox.varianceIcon !== "none"
+                && settings.commentBox.showVariance !== "none"
+                && displayedVariance !== null
+                && displayedVariance !== 0
+            ) {
+                const positive = displayedVariance > 0;
+                const icon = settings.commentBox.varianceIcon === "triangle"
+                    ? positive ? " ▲" : " ▼"
+                    : settings.commentBox.varianceIcon === "arrow"
+                        ? positive ? " ↑" : " ↓"
+                        : " ●";
+                valueLine.append("xhtml:span")
+                    .style("color", positive ? settings.colors.positiveVariance : settings.colors.negativeVariance)
+                    .text(icon);
+            }
+            content.append("xhtml:div").style("color", this.foreground).text(point.comment.trim());
+        });
+    }
 
-            const direction: "horizontal" | "vertical" =
-                (pos === "top" || pos === "bottom") ? "horizontal" : "vertical";
+    private buildLegendItems(
+        chartType: ChartType,
+        settings: ChartSettings
+    ): Array<{ label: string; color: string; outlined?: boolean }> {
+        const comparisonAvailable = this.parsedData !== null
+            && this.hasComparisonData(this.parsedData, settings.comparisonType);
+        const comparison = comparisonAvailable ? {
+            label: this.getComparisonLabel(settings.comparisonType),
+            color: settings.colors[settings.comparisonType],
+            outlined: true
+        } : null;
+        const actual = { label: "Actual", color: settings.colors.actual };
+        const variance = [
+            { label: "+Variance", color: settings.colors.positiveVariance },
+            { label: "−Variance", color: settings.colors.negativeVariance }
+        ];
 
-            legendItems.forEach((item, i) => {
-                const ix = direction === "horizontal" ? i * 70 : 0;
-                const iy = direction === "horizontal" ? 0 : i * 20;
-                if (item.outlined) {
-                    legendGroup.append("rect")
-                        .attr("x", ix).attr("y", iy)
-                        .attr("width", 12).attr("height", 12)
-                        .attr("fill", "none")
-                        .attr("stroke", item.color).attr("stroke-width", 2)
-                        .attr("stroke-dasharray", "3,1");
-                } else {
-                    legendGroup.append("rect")
-                        .attr("x", ix).attr("y", iy)
-                        .attr("width", 12).attr("height", 12)
-                        .attr("fill", item.color);
-                }
-                legendGroup.append("text")
-                    .attr("x", ix + 18).attr("y", iy + 10)
-                    .attr("font-size", `${chartSettings.legend.fontSize}px`)
-                    .attr("fill", "#333")
-                    .text(item.label);
-            });
+        if (chartType === "line" || chartType === "area" || chartType === "combo") {
+            const comparisons: Array<{ label: string; color: string }> = [];
+            if (this.parsedData?.hasBudget) {
+                comparisons.push({ label: "Plan", color: settings.colors.budget });
+            }
+            if (this.parsedData?.hasPreviousYear) {
+                comparisons.push({ label: "Previous Year", color: settings.colors.previousYear });
+            }
+            if (this.parsedData?.hasForecast) {
+                comparisons.push({ label: "Forecast", color: settings.colors.forecast });
+            }
+            return [actual, ...comparisons];
         }
+        if (chartType === "lollipop") {
+            return comparison ? variance : [];
+        }
+        if (chartType === "dot") {
+            return comparison ? [comparison, actual, ...variance] : [actual];
+        }
+        if (chartType === "variance" || chartType === "waterfall") {
+            return comparison ? [comparison, actual, ...variance] : [actual];
+        }
+        return comparison ? [actual, comparison] : [actual];
+    }
 
-        // Render outer-level comment box
-        if (chartSettings.commentBox.show && this.parsedData.hasComments) {
-            const comments = this.parsedData.dataPoints
-                .map((d, i) => ({ dp: d, index: i }))
-                .filter(({ dp }) => dp.comment && dp.comment.trim() !== "");
+    private createSelectionIds(): void {
+        this.selectionIds = [];
+        const category = this.getCategoryColumn();
+        if (!category) return;
+        const group = this.getGroupColumn();
+        for (let index = 0; index < category.values.length; index++) {
+            let builder = this.host.createSelectionIdBuilder().withCategory(category, index);
+            if (group && index < group.values.length) builder = builder.withCategory(group, index);
+            this.selectionIds.push(builder.createSelectionId());
+        }
+    }
 
-            if (comments.length > 0) {
-                const cbX = vp.x + vp.width + 10;
-                const cbY = chartSettings.legend.show && chartSettings.legend.position === "right"
-                    ? vp.y + Math.min(comments.length, 3) * 20 + 30
-                    : vp.y;
-                const cbWidth = 200;
-                const cbHeight = totalHeight - cbY;
+    private getCategoryColumn(): DataViewCategoryColumn | undefined {
+        const categories = this.dataView?.categorical?.categories;
+        if (!categories) return undefined;
+        return categories.find(column => column.source.roles?.["category"]) ?? categories[0];
+    }
 
-                const { commentBox: cbSettings } = chartSettings;
-                const markerSize = cbSettings.markerSize || 18;
-                const fontSize = cbSettings.fontSize;
-                const padding = cbSettings.padding;
+    private getGroupColumn(): DataViewCategoryColumn | undefined {
+        return this.dataView?.categorical?.categories?.find(column => column.source.roles?.["group"]);
+    }
 
-                // Use foreignObject for native scrollbar
-                const fo = this.chartContainer.append("foreignObject")
-                    .attr("class", "comment-box")
-                    .attr("x", cbX)
-                    .attr("y", cbY)
-                    .attr("width", cbWidth)
-                    .attr("height", Math.max(cbHeight, 60));
+    private addInteractivity(comparisonType: ComparisonType): void {
+        if (!this.parsedData) return;
+        const points = this.chartContainer.selectAll<SVGElement, unknown>("[data-source-indices]");
+        const primaryByKey = new Map<string, SVGElement>();
+        const enableSelection = this.allowInteractions()
+            && this.formattingSettings.interactionCard.enableSelection.value;
+        const enableDrilldown = this.allowInteractions()
+            && this.formattingSettings.interactionCard.enableDrilldown.value;
 
-                const scrollDiv = fo.append("xhtml:div")
-                    .style("width", `${cbWidth}px`)
-                    .style("height", `${Math.max(cbHeight, 60)}px`)
-                    .style("overflow-y", "auto")
-                    .style("overflow-x", "hidden")
-                    .style("font-family", "\"Segoe UI\", sans-serif")
-                    .style("box-sizing", "border-box");
+        points.each((_, elementIndex, nodes) => {
+            const element = nodes[elementIndex];
+            const sourceIndices = this.getSourceIndices(element);
+            const key = sourceIndices.join(",");
+            const point = this.getDataPoint(sourceIndices);
+            if (!point || sourceIndices.length === 0) {
+                element.removeAttribute("data-source-indices");
+                element.setAttribute("aria-hidden", "true");
+                return;
+            }
 
-                comments.forEach(({ dp, index }, cardIndex) => {
-                    const markerNum = cardIndex + 1;
-                    const variance = getVariance(dp, chartSettings.comparisonType);
-                    const variancePct = getVariancePct(dp, chartSettings.comparisonType);
-                    const isPositive = (chartSettings.invertVariance ? -variance : variance) >= 0;
+            element.classList.add("data-point-mark");
+            element.style.cursor = enableSelection || enableDrilldown ? "pointer" : "default";
+            if (!primaryByKey.has(key)) {
+                primaryByKey.set(key, element);
+                element.classList.add("logical-data-point");
+                element.setAttribute("role", enableSelection || enableDrilldown ? "button" : "img");
+                element.setAttribute("aria-label", this.getAccessibleName(point, comparisonType));
+                element.setAttribute("tabindex", this.focusSourceKey === key || (!this.focusSourceKey && primaryByKey.size === 1) ? "0" : "-1");
+                if (enableDrilldown && sourceIndices.length === 1) {
+                    element.setAttribute("aria-keyshortcuts", "Alt+ArrowDown");
+                }
+            } else {
+                element.setAttribute("tabindex", "-1");
+                element.setAttribute("aria-hidden", "true");
+            }
 
-                    const card = scrollDiv.append("xhtml:div")
-                        .style("display", "flex")
-                        .style("align-items", "flex-start")
-                        .style("gap", `${padding}px`)
-                        .style("margin-bottom", `${cbSettings.gap}px`)
-                        .style("padding", `${padding}px 0`);
-
-                    // Numbered circle marker
-                    card.append("xhtml:div")
-                        .attr("class", "comment-card-marker")
-                        .attr("data-comment-index", String(index))
-                        .style("min-width", `${markerSize}px`)
-                        .style("width", `${markerSize}px`)
-                        .style("height", `${markerSize}px`)
-                        .style("border-radius", "50%")
-                        .style("border", `1.5px solid ${cbSettings.markerColor}`)
-                        .style("display", "flex")
-                        .style("align-items", "center")
-                        .style("justify-content", "center")
-                        .style("font-size", `${fontSize}px`)
-                        .style("font-weight", "bold")
-                        .style("color", cbSettings.markerColor)
-                        .style("flex-shrink", "0")
-                        .text(String(markerNum));
-
-                    // Content column
-                    const content = card.append("xhtml:div")
-                        .style("flex", "1")
-                        .style("min-width", "0");
-
-                    // Line 1: Category + group label
-                    const label = dp.group ? `${dp.group}, ${dp.category}` : dp.category;
-                    content.append("xhtml:div")
-                        .style("font-size", `${fontSize + 1}px`)
-                        .style("font-weight", "bold")
-                        .style("color", cbSettings.fontColor)
-                        .style("line-height", "1.3")
-                        .text(label);
-
-                    // Line 2: Value + variance + icon
-                    let valueText = formatNumber(dp.actual);
-                    if (cbSettings.showVariance === "absolute" || cbSettings.showVariance === "both") {
-                        valueText += ` ${formatNumber(chartSettings.invertVariance ? -variance : variance)}`;
-                    }
-                    if (cbSettings.showVariance === "relative" || cbSettings.showVariance === "both") {
-                        const pctVal = chartSettings.invertVariance ? -variancePct : variancePct;
-                        valueText += ` ${formatPercent(pctVal, 1, true)}`;
-                    }
-
-                    const valueLine = content.append("xhtml:div")
-                        .style("font-size", `${fontSize}px`)
-                        .style("color", "#333")
-                        .style("line-height", "1.4");
-
-                    valueLine.append("xhtml:span").text(valueText);
-
-                    if (cbSettings.varianceIcon !== "none" && cbSettings.showVariance !== "none") {
-                        let icon = "";
-                        if (cbSettings.varianceIcon === "triangle") icon = isPositive ? " \u25B2" : " \u25BC";
-                        else if (cbSettings.varianceIcon === "arrow") icon = isPositive ? " \u2191" : " \u2193";
-                        else if (cbSettings.varianceIcon === "circle") icon = " \u25CF";
-
-                        const iconColor = isPositive
-                            ? chartSettings.colors.positiveVariance
-                            : chartSettings.colors.negativeVariance;
-                        valueLine.append("xhtml:span")
-                            .attr("class", "variance-icon")
-                            .style("color", iconColor)
-                            .style("font-size", `${fontSize + 2}px`)
-                            .text(icon);
-                    }
-
-                    // Comment text
-                    if (dp.comment) {
-                        content.append("xhtml:div")
-                            .style("font-size", `${fontSize - 1}px`)
-                            .style("color", "#666")
-                            .style("line-height", "1.4")
-                            .style("word-wrap", "break-word")
-                            .text(dp.comment.trim());
-                    }
+            if (enableSelection) {
+                d3.select(element).on("click", (event: MouseEvent) => {
+                    event.stopPropagation();
+                    this.activatePoint(sourceIndices, event.ctrlKey || event.metaKey);
                 });
             }
+            if (enableDrilldown && sourceIndices.length === 1) {
+                d3.select(element).on("dblclick", (event: MouseEvent) => {
+                    event.stopPropagation();
+                    this.activateDrillPoint(sourceIndices);
+                });
+            }
+
+            if (
+                this.formattingSettings.interactionCard.enableTooltips.value
+                && this.host.tooltipService.enabled()
+            ) {
+                d3.select(element)
+                    .on("mouseover", (event: MouseEvent) => this.showTooltip(event, point, sourceIndices, comparisonType))
+                    .on("mousemove", (event: MouseEvent) => this.moveTooltip(event, point, sourceIndices, comparisonType))
+                    .on("mouseout", () => this.host.tooltipService.hide({ immediately: true, isTouchEvent: false }));
+            }
+        });
+
+        if (![...primaryByKey.values()].some(element => element.getAttribute("tabindex") === "0")) {
+            const first = primaryByKey.entries().next().value;
+            if (first) {
+                this.focusSourceKey = first[0];
+                first[1].setAttribute("tabindex", "0");
+            }
         }
 
-        if (enableTelemetry) console.groupEnd();
+        for (const [key, element] of primaryByKey) {
+            d3.select(element)
+                .on("focus", () => {
+                    this.focusSourceKey = key;
+                    this.updateRovingTabindex(key);
+                })
+                .on("keydown", (event: KeyboardEvent) => this.handlePointKeydown(event, element));
+        }
+
+        this.svg.attr("tabindex", 0);
+        this.decorateCommentRegions();
     }
 
-    private buildLegendItems(chartType: ChartType, settings: ChartSettings): Array<{ label: string; color: string; outlined?: boolean }> {
-        const compLabel = settings.comparisonType === "previousYear" ? "Previous Year"
-            : settings.comparisonType === "forecast" ? "Forecast" : "Budget";
-        const compColor = settings.comparisonType === "previousYear" ? settings.colors.previousYear
-            : settings.comparisonType === "forecast" ? settings.colors.forecast : settings.colors.budget;
-
-        if (chartType === "variance" || chartType === "waterfall") {
-            return [
-                { label: compLabel, color: compColor, outlined: true },
-                { label: "Actual", color: settings.colors.actual },
-                { label: "+Variance", color: settings.colors.positiveVariance },
-                { label: "-Variance", color: settings.colors.negativeVariance }
-            ];
+    private getSourceIndices(element: Element): number[] {
+        const source = element.getAttribute("data-source-indices");
+        if (!source) return [];
+        const indices: number[] = [];
+        for (const part of source.split(",")) {
+            const index = Number(part);
+            if (Number.isInteger(index) && index >= 0 && !indices.includes(index)) indices.push(index);
         }
-        return [
-            { label: "Actual", color: settings.colors.actual },
-            { label: compLabel, color: compColor, outlined: true }
-        ];
+        return indices;
     }
 
-    private getColors(): IBCSColors {
-        // Use high contrast colors if enabled
-        if (this.isHighContrast && this.highContrastColors) {
-            return {
-                actual: this.highContrastColors.foreground,
-                budget: this.highContrastColors.foreground,
-                previousYear: this.highContrastColors.foreground,
-                forecast: this.highContrastColors.foreground,
-                positiveVariance: this.highContrastColors.foreground,
-                negativeVariance: this.highContrastColors.foreground
-            };
+    private getDataPoint(sourceIndices: number[]): DataPoint | undefined {
+        if (!this.parsedData) return undefined;
+        const key = sourceIndices.join(",");
+        return this.parsedData.dataPoints.find(point => point.sourceIndices.join(",") === key);
+    }
+
+    private getSelectionIds(sourceIndices: number[]): ISelectionId[] {
+        return sourceIndices
+            .map(index => this.selectionIds[index])
+            .filter((selectionId): selectionId is ISelectionId => selectionId !== undefined);
+    }
+
+    private activatePoint(sourceIndices: number[], multiSelect: boolean): void {
+        const point = this.getDataPoint(sourceIndices);
+        if (!point) return;
+        if (this.getInteractionMode() === "filter") {
+            if (this.applyCrossFilter(sourceIndices, multiSelect)) {
+                this.announce(`${point.category} filter updated.`);
+            }
+            return;
         }
 
-        const colors = this.formattingSettings.ibcsColorsCard;
+        const ids = this.getSelectionIds(sourceIndices);
+        if (ids.length === 0) return;
+        this.selectionManager.select(ids.length === 1 ? ids[0] : ids, multiSelect).then(
+            selected => {
+                this.syncSelectionState(selected.filter(isVisualSelectionId));
+                this.announce(`${point.category} selected.`);
+            },
+            () => this.announceInteractionError()
+        );
+    }
+
+    private handleBackgroundClick(event: MouseEvent): void {
+        if (!this.allowInteractions() || !this.formattingSettings.interactionCard.enableSelection.value) return;
+        const target = event.target;
+        if (!(target instanceof Element) || target.closest("[data-source-indices], .visual-control")) return;
+        this.clearInteraction();
+    }
+
+    private clearInteraction(): void {
+        if (!this.allowInteractions() || !this.formattingSettings.interactionCard.enableSelection.value) return;
+        if (this.getInteractionMode() === "filter") {
+            this.clearCrossFilter();
+            return;
+        }
+        this.selectionManager.clear().then(
+            () => {
+                this.syncSelectionState([]);
+                this.announce("Selection cleared.");
+            },
+            () => this.announceInteractionError()
+        );
+    }
+
+    private applyCrossFilter(sourceIndices: number[], multiSelect: boolean): boolean {
+        const tuples = sourceIndices
+            .map(index => this.getFilterTuple(index))
+            .filter((tuple): tuple is FilterTuple => tuple !== null);
+        if (tuples.length === 0) {
+            this.announceInteractionError();
+            return false;
+        }
+
+        const next = multiSelect
+            ? new Map(this.filterTuples)
+            : new Map<string, FilterTuple>();
+        const allSelected = tuples.every(tuple => next.has(this.filterKey(tuple)));
+        for (const tuple of tuples) {
+            const key = this.filterKey(tuple);
+            if (multiSelect && allSelected) next.delete(key);
+            else next.set(key, tuple);
+        }
+
+        if (!this.applyFilterState(next)) return false;
+        this.filterTuples = next;
+        this.syncFilterState();
+        return true;
+    }
+
+    private clearCrossFilter(): void {
+        if (!this.applyFilterState(new Map())) return;
+        this.filterTuples.clear();
+        this.syncFilterState();
+        this.announce("Filter cleared.");
+    }
+
+    private applyFilterState(state: Map<string, FilterTuple>): boolean {
+        try {
+            if (state.size === 0) {
+                this.host.applyJsonFilter(
+                    // The 5.11 runtime/docs require null to clear; its declaration omits null.
+                    null as never,
+                    "general",
+                    "filter",
+                    FILTER_REMOVE
+                );
+                return true;
+            }
+            const categoryTarget = this.getFilterTarget(this.getCategoryColumn());
+            if (!categoryTarget) throw new Error("Category target unavailable");
+            const group = this.getGroupColumn();
+            if (group) {
+                const groupTarget = this.getFilterTarget(group);
+                if (!groupTarget) throw new Error("Group target unavailable");
+                const values: TupleValueType[] = Array.from(state.values()).flatMap(tuple =>
+                    tuple.group === undefined
+                        ? []
+                        : [[{ value: tuple.category }, { value: tuple.group }]]
+                );
+                if (values.length !== state.size) throw new Error("Incomplete filter tuple");
+                this.host.applyJsonFilter(
+                    new TupleFilter([categoryTarget, groupTarget], "In", values),
+                    "general",
+                    "filter",
+                    FILTER_MERGE
+                );
+            } else {
+                this.host.applyJsonFilter(
+                    new BasicFilter(
+                        categoryTarget,
+                        "In",
+                        Array.from(state.values()).map(tuple => tuple.category)
+                    ),
+                    "general",
+                    "filter",
+                    FILTER_MERGE
+                );
+            }
+            return true;
+        } catch {
+            this.announceInteractionError();
+            return false;
+        }
+    }
+
+    private getFilterValue(column: DataViewCategoryColumn | undefined, index: number): FilterValue | null {
+        const value = column?.values[index];
+        if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.toISOString() : null;
+        if (typeof value === "number") return Number.isFinite(value) ? value : null;
+        if (typeof value === "string" || typeof value === "boolean") return value;
+        return null;
+    }
+
+    private getFilterTuple(index: number): FilterTuple | null {
+        const category = this.getFilterValue(this.getCategoryColumn(), index);
+        if (category === null) return null;
+        const groupColumn = this.getGroupColumn();
+        if (!groupColumn) return { category };
+        const group = this.getFilterValue(groupColumn, index);
+        return group === null ? null : { category, group };
+    }
+
+    private valueKey(value: FilterValue): string {
+        return `${typeof value}:${String(value)}`;
+    }
+
+    private filterKey(tuple: FilterTuple): string {
+        return tuple.group === undefined
+            ? this.valueKey(tuple.category)
+            : `${this.valueKey(tuple.category)}|${this.valueKey(tuple.group)}`;
+    }
+
+    private getFilterTarget(category?: DataViewCategoryColumn): IFilterColumnTarget | null {
+        if (!category) return null;
+        const queryName = category.source.queryName ?? "";
+        const separator = queryName.lastIndexOf(".");
+        if (separator <= 0 || separator === queryName.length - 1) return null;
         return {
-            actual: colors.actualColor.value.value || DEFAULT_IBCS_COLORS.actual,
-            budget: colors.budgetColor.value.value || DEFAULT_IBCS_COLORS.budget,
-            previousYear: colors.previousYearColor.value.value || DEFAULT_IBCS_COLORS.previousYear,
-            forecast: colors.forecastColor.value.value || DEFAULT_IBCS_COLORS.forecast,
-            positiveVariance: colors.positiveVarianceColor.value.value || DEFAULT_IBCS_COLORS.positiveVariance,
-            negativeVariance: colors.negativeVarianceColor.value.value || DEFAULT_IBCS_COLORS.negativeVariance
+            table: queryName.slice(0, separator),
+            column: queryName.slice(separator + 1)
         };
     }
 
-    private renderLandingPage(): void {
-        const width = parseInt(this.svg.attr("width")) || 300;
-        const height = parseInt(this.svg.attr("height")) || 200;
+    private restoreFilterState(filters?: powerbi.IFilter[]): void {
+        if (filters === undefined) return;
+        if (filters.length === 0) {
+            this.filterTuples.clear();
+            return;
+        }
+        const categoryTarget = this.getFilterTarget(this.getCategoryColumn());
+        const groupTarget = this.getFilterTarget(this.getGroupColumn());
+        if (!categoryTarget) return;
+        const restored = new Map<string, FilterTuple>();
+        let matched = false;
+        for (const filter of filters) {
+            if (
+                groupTarget === null
+                && isBasicFilter(filter)
+                && isColumnTarget(filter.target)
+                && this.targetsEqual(filter.target, categoryTarget)
+            ) {
+                matched = true;
+                for (const category of filter.values) {
+                    const tuple = { category };
+                    restored.set(this.filterKey(tuple), tuple);
+                }
+            } else if (
+                groupTarget !== null
+                && isTupleFilter(filter)
+                && filter.target.length === 2
+                && isColumnTarget(filter.target[0])
+                && isColumnTarget(filter.target[1])
+                && this.targetsEqual(filter.target[0], categoryTarget)
+                && this.targetsEqual(filter.target[1], groupTarget)
+            ) {
+                matched = true;
+                for (const tupleValue of filter.values) {
+                    if (tupleValue.length !== 2) continue;
+                    const tuple = {
+                        category: tupleValue[0].value,
+                        group: tupleValue[1].value
+                    };
+                    restored.set(this.filterKey(tuple), tuple);
+                }
+            }
+        }
+        this.filterTuples = matched ? restored : new Map();
+    }
 
-        // Landing page background
-        this.chartContainer.append("rect")
+    private targetsEqual(left: IFilterColumnTarget, right: IFilterColumnTarget): boolean {
+        return left.table === right.table && left.column === right.column;
+    }
+
+    private syncSelectionState(selectedIds: ISelectionId[]): void {
+        const selectedSources = new Set<number>();
+        for (let index = 0; index < this.selectionIds.length; index++) {
+            const ownId = this.selectionIds[index];
+            if (selectedIds.some(selected => ownId.equals(selected) || ownId.getKey() === selected.getKey())) {
+                selectedSources.add(index);
+            }
+        }
+        this.applyInteractionState(
+            selectedIds.length > 0,
+            element => this.getSourceIndices(element).some(index => selectedSources.has(index))
+        );
+        this.highlightComment(selectedSources.size === 1 ? [selectedSources.values().next().value as number] : []);
+    }
+
+    private syncFilterState(): void {
+        const selectedSources: number[] = [];
+        for (let index = 0; index < this.selectionIds.length; index++) {
+            const tuple = this.getFilterTuple(index);
+            if (tuple !== null && this.filterTuples.has(this.filterKey(tuple))) {
+                selectedSources.push(index);
+            }
+        }
+        this.applyInteractionState(
+            this.filterTuples.size > 0,
+            element => this.getSourceIndices(element).some(index => selectedSources.includes(index))
+        );
+        this.highlightComment(selectedSources.length === 1 ? selectedSources : []);
+    }
+
+    private applyInteractionState(hasSelection: boolean, isSelected: (element: Element) => boolean): void {
+        if (!this.allowInteractions() || !this.formattingSettings.interactionCard.enableSelection.value) {
+            this.chartContainer.selectAll<SVGElement, unknown>("[data-source-indices]").each((_, index, nodes) => {
+                const element = nodes[index];
+                element.style.opacity = "1";
+                element.classList.remove("host-selected");
+                element.removeAttribute("aria-pressed");
+            });
+            this.svg.selectAll(".clear-selection-btn").remove();
+            return;
+        }
+        this.chartContainer.selectAll<SVGElement, unknown>("[data-source-indices]").each((_, index, nodes) => {
+            const element = nodes[index];
+            const selected = hasSelection && isSelected(element);
+            element.style.opacity = !hasSelection || selected ? "1" : "0.3";
+            element.classList.toggle("host-selected", selected);
+            element.setAttribute("aria-pressed", selected ? "true" : "false");
+        });
+        if (hasSelection) this.renderClearSelectionButton();
+        else this.svg.selectAll(".clear-selection-btn").remove();
+    }
+
+    private highlightComment(sourceIndices: number[]): void {
+        const key = sourceIndices.join(",");
+        this.target.querySelectorAll<Element>("[data-comment-source]").forEach(element => {
+            element.classList.toggle(
+                "comment-highlighted",
+                key.length > 0 && element.getAttribute("data-comment-source") === key
+            );
+        });
+    }
+
+    private renderClearSelectionButton(): void {
+        this.svg.selectAll(".clear-selection-btn").remove();
+        const button = this.svg.append("g")
+            .attr("class", "clear-selection-btn visual-control")
+            .attr("role", "button")
+            .attr("aria-label", "Clear selection")
+            .attr("tabindex", 0)
+            .attr("transform", "translate(8, 8)")
+            .on("click", (event: MouseEvent) => {
+                event.stopPropagation();
+                this.clearInteraction();
+            })
+            .on("keydown", (event: KeyboardEvent) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    this.clearInteraction();
+                }
+            });
+        button.append("rect")
+            .attr("width", 22)
+            .attr("height", 22)
+            .attr("rx", 3)
+            .attr("fill", this.background)
+            .attr("stroke", this.foreground);
+        button.append("text")
+            .attr("x", 11)
+            .attr("y", 16)
+            .attr("text-anchor", "middle")
+            .attr("fill", this.foreground)
+            .text("×");
+    }
+
+    private showTooltip(
+        event: MouseEvent,
+        point: DataPoint,
+        sourceIndices: number[],
+        comparisonType: ComparisonType
+    ): void {
+        this.host.tooltipService.show({
+            dataItems: this.buildTooltipForDataPoint(point, comparisonType),
+            identities: this.getSelectionIds(sourceIndices),
+            coordinates: [event.clientX, event.clientY],
+            isTouchEvent: false
+        });
+    }
+
+    private moveTooltip(
+        event: MouseEvent,
+        point: DataPoint,
+        sourceIndices: number[],
+        comparisonType: ComparisonType
+    ): void {
+        this.host.tooltipService.move({
+            dataItems: this.buildTooltipForDataPoint(point, comparisonType),
+            identities: this.getSelectionIds(sourceIndices),
+            coordinates: [event.clientX, event.clientY],
+            isTouchEvent: false
+        });
+    }
+
+    private buildTooltipForDataPoint(point: DataPoint, comparisonType: ComparisonType): VisualTooltipDataItem[] {
+        const comparisonLabel = this.getComparisonLabel(comparisonType);
+        const { variance, percentage } = this.getDisplayedVariance(point, comparisonType);
+        const items: VisualTooltipDataItem[] = [{ displayName: "Category", value: point.category }];
+        if (point.actual !== null) {
+            items.push({
+                displayName: "Actual",
+                value: this.formatModelMeasure(point.actual, "actual")
+            });
+        }
+        const comparisons: Array<{ type: ComparisonType; label: string; available: boolean }> = [
+            { type: "budget", label: "Plan", available: this.parsedData?.hasBudget === true },
+            { type: "previousYear", label: "Previous Year", available: this.parsedData?.hasPreviousYear === true },
+            { type: "forecast", label: "Forecast", available: this.parsedData?.hasForecast === true }
+        ];
+        for (const comparison of comparisons) {
+            const value = getComparisonValue(point, comparison.type);
+            if (comparison.available && value !== null) {
+                items.push({
+                    displayName: comparison.label,
+                    value: this.formatModelMeasure(value, comparison.type)
+                });
+            }
+        }
+        if (variance !== null) {
+            items.push({
+                displayName: `Variance to ${comparisonLabel}`,
+                value: percentage === null
+                    ? this.formatModelMeasure(variance, "actual", true)
+                    : `${this.formatModelMeasure(variance, "actual", true)} (${formatPercent(percentage, 1, true, this.host.locale)})`
+            });
+        }
+        if (point.tooltipFields) {
+            items.push(...point.tooltipFields.map(field => ({ displayName: field.displayName, value: field.value })));
+        }
+        if (point.comment) items.push({ displayName: "Comment", value: point.comment });
+        return items;
+    }
+
+    private formatMeasure(value: FiniteValue, measure: MeasureKey, showSign = false): string {
+        return formatNumber(value, {
+            scale: "none",
+            decimals: Math.floor(finiteSetting(
+                this.formattingSettings.dataLabelsCard.decimalPlaces.value,
+                1,
+                0,
+                20
+            )),
+            negativeFormat: enumSetting<"minus" | "parentheses">(
+                this.formattingSettings.dataLabelsCard.negativeFormat.value.value,
+                ["minus", "parentheses"],
+                "minus"
+            ),
+            showSign,
+            format: this.parsedData?.formats[measure],
+            locale: this.parsedData?.locale ?? this.host.locale
+        });
+    }
+
+    private formatModelMeasure(value: FiniteValue, measure: MeasureKey, showSign = false): string {
+        const formatted = formatModelValue(
+            value,
+            this.parsedData?.formats[measure],
+            this.parsedData?.locale ?? this.host.locale
+        );
+        if (formatted === null) return "—";
+        return showSign && value !== null && value > 0 ? `+${formatted}` : formatted;
+    }
+
+    private getDisplayedVariance(
+        point: DataPoint,
+        comparisonType: ComparisonType
+    ): { variance: FiniteValue; percentage: FiniteValue } {
+        const rawVariance = getVariance(point, comparisonType);
+        const rawPercentage = getVariancePct(point, comparisonType);
+        if (!this.formattingSettings.chartSettingsCard.invertVariance.value) {
+            return { variance: rawVariance, percentage: rawPercentage };
+        }
+        return {
+            variance: rawVariance === null ? null : -rawVariance,
+            percentage: rawPercentage === null ? null : -rawPercentage
+        };
+    }
+
+    private getAccessibleName(point: DataPoint, comparisonType: ComparisonType): string {
+        const comparisonLabel = this.getComparisonLabel(comparisonType);
+        const parts = [point.group ? `${point.group}, ${point.category}` : point.category];
+        if (point.actual !== null) {
+            parts.push(`Actual ${this.formatModelMeasure(point.actual, "actual")}`);
+        }
+        const comparisons: Array<{ type: ComparisonType; label: string; available: boolean }> = [
+            { type: "budget", label: "Plan", available: this.parsedData?.hasBudget === true },
+            { type: "previousYear", label: "Previous Year", available: this.parsedData?.hasPreviousYear === true },
+            { type: "forecast", label: "Forecast", available: this.parsedData?.hasForecast === true }
+        ];
+        for (const comparison of comparisons) {
+            const value = getComparisonValue(point, comparison.type);
+            if (comparison.available && value !== null) {
+                parts.push(`${comparison.label} ${this.formatModelMeasure(value, comparison.type)}`);
+            }
+        }
+        const { variance, percentage } = this.getDisplayedVariance(point, comparisonType);
+        if (variance !== null) parts.push(`Variance to ${comparisonLabel} ${this.formatModelMeasure(variance, "actual", true)}`);
+        if (percentage !== null) parts.push(formatPercent(percentage, 1, true, this.host.locale));
+        return parts.join(". ");
+    }
+
+    private handlePointKeydown(event: KeyboardEvent, element: SVGElement): void {
+        const targets = Array.from(this.target.querySelectorAll<SVGElement>(".logical-data-point"));
+        const current = targets.indexOf(element);
+        let next = current;
+        if (event.altKey && event.key === "ArrowDown") {
+            if (this.allowInteractions() && this.formattingSettings.interactionCard.enableDrilldown.value) {
+                event.preventDefault();
+                this.activateDrillPoint(this.getSourceIndices(element));
+            }
+            return;
+        }
+        if (event.key === "ArrowRight" || event.key === "ArrowDown") next = Math.min(targets.length - 1, current + 1);
+        else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = Math.max(0, current - 1);
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = targets.length - 1;
+        else if (event.key === "Enter" || event.key === " ") {
+            if (this.allowInteractions() && this.formattingSettings.interactionCard.enableSelection.value) {
+                event.preventDefault();
+                this.activatePoint(this.getSourceIndices(element), event.ctrlKey || event.metaKey);
+            } else if (this.allowInteractions() && this.formattingSettings.interactionCard.enableDrilldown.value) {
+                event.preventDefault();
+                this.activateDrillPoint(this.getSourceIndices(element));
+            }
+            return;
+        } else if (event.key === "Escape") {
+            event.preventDefault();
+            this.clearInteraction();
+            return;
+        } else if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+            event.preventDefault();
+            this.showKeyboardContextMenu(element);
+            return;
+        } else {
+            return;
+        }
+        event.preventDefault();
+        targets[next]?.focus();
+    }
+
+    private updateRovingTabindex(activeKey: string): void {
+        this.target.querySelectorAll<SVGElement>(".logical-data-point").forEach(element => {
+            element.setAttribute("tabindex", element.getAttribute("data-source-indices") === activeKey ? "0" : "-1");
+        });
+    }
+
+    private showKeyboardContextMenu(element: SVGElement): void {
+        const rect = element.getBoundingClientRect();
+        this.showContextMenuForElement(element, {
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2
+        });
+    }
+
+    private handleContextMenu(event: MouseEvent): void {
+        event.preventDefault();
+        const target = event.target;
+        const element = target instanceof Element ? target.closest("[data-source-indices]") : null;
+        this.showContextMenuForElement(element, { x: event.clientX, y: event.clientY });
+    }
+
+    private showContextMenuForElement(element: Element | null, position: { x: number; y: number }): void {
+        if (!this.allowInteractions()) return;
+        const sourceIndices = element ? this.getSourceIndices(element) : [];
+        const point = this.getDataPoint(sourceIndices);
+        const selectionId = point !== undefined && point.index !== null && sourceIndices.length === 1
+            ? this.selectionIds[sourceIndices[0]]
+            : undefined;
+        this.selectionManager.showContextMenu(selectionId ?? {}, position)?.then(
+            () => undefined,
+            () => this.announceInteractionError()
+        );
+    }
+
+    private handleRootKeydown(event: KeyboardEvent): void {
+        if (event.key === "Escape") {
+            event.preventDefault();
+            this.clearInteraction();
+        } else if (
+            event.target === this.svg.node()
+            && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))
+        ) {
+            event.preventDefault();
+            const rect = this.svg.node()?.getBoundingClientRect();
+            this.showContextMenuForElement(null, {
+                x: rect ? rect.left + rect.width / 2 : 0,
+                y: rect ? rect.top + rect.height / 2 : 0
+            });
+        }
+    }
+
+    private decorateRenderedContent(): void {
+        this.chartContainer
+            .selectAll(".x-axis, .y-axis, .legend, .chart-title, .axis-break-indicator, .synthetic-total")
+            .attr("aria-hidden", "true");
+        this.chartContainer.selectAll(".legend text").attr("fill", this.foreground);
+        this.chartContainer.selectAll(".comment-box").style("color", this.foreground);
+        this.chartContainer.selectAll("line").attr("aria-hidden", "true");
+    }
+
+    private decorateCommentRegions(): void {
+        this.target.querySelectorAll<HTMLElement>(".comment-box > div").forEach(region => {
+            region.setAttribute("role", "region");
+            region.setAttribute("aria-label", "Chart comments");
+            region.setAttribute("tabindex", "0");
+            region.style.color = this.foreground;
+            region.style.backgroundColor = this.background;
+        });
+    }
+
+    private renderDrillUpButton(): void {
+        if (!this.allowInteractions()) return;
+        const category = this.getCategoryColumn();
+        const queryName = category?.source.queryName ?? "";
+        if (queryName.split(".").length <= 2) return;
+        const button = this.chartContainer.append("g")
+            .attr("class", "drill-up-button visual-control")
+            .attr("role", "button")
+            .attr("aria-label", "Drill up")
+            .attr("tabindex", 0)
+            .style("cursor", "pointer")
+            .on("click", () => this.triggerDrill(DRILL_UP))
+            .on("keydown", (event: KeyboardEvent) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    this.triggerDrill(DRILL_UP);
+                }
+            });
+        button.append("text").attr("fill", this.selectionColor).text("↑ Drill Up");
+    }
+
+    private activateDrillPoint(sourceIndices: number[]): void {
+        const ids = this.getSelectionIds(sourceIndices);
+        if (ids.length !== 1) return;
+        this.selectionManager.select(ids[0], false).then(
+            () => this.triggerDrill(DRILL_DOWN),
+            () => this.announceInteractionError()
+        );
+    }
+
+    private triggerDrill(drillType: powerbi.DrillType): void {
+        try {
+            this.host.drill({ roleName: "category", drillType });
+        } catch {
+            this.announceInteractionError();
+        }
+    }
+
+    private getColors(): IBCSColors {
+        if (this.host.colorPalette.isHighContrast === true) {
+            return {
+                actual: this.foreground,
+                budget: this.foreground,
+                previousYear: this.foreground,
+                forecast: this.foreground,
+                positiveVariance: this.foreground,
+                negativeVariance: this.foreground
+            };
+        }
+        const colors = this.formattingSettings.designCard;
+        return {
+            actual: colors.actualColor.value.value,
+            budget: colors.budgetColor.value.value,
+            previousYear: colors.previousYearColor.value.value,
+            forecast: colors.forecastColor.value.value,
+            positiveVariance: colors.positiveVarianceColor.value.value,
+            negativeVariance: colors.negativeVarianceColor.value.value
+        };
+    }
+
+    private hasComparisonData(data: ParsedData, comparisonType: ComparisonType): boolean {
+        return comparisonType === "budget"
+            ? data.hasBudget
+            : comparisonType === "previousYear" ? data.hasPreviousYear : data.hasForecast;
+    }
+
+    private getComparisonLabel(comparisonType: ComparisonType): string {
+        if (comparisonType === "previousYear") return "Previous Year";
+        if (comparisonType === "forecast") return "Forecast";
+        return "Plan";
+    }
+
+    private renderLandingPage(): void {
+        const width = finiteDimension(Number(this.svg.attr("width")));
+        const height = finiteDimension(Number(this.svg.attr("height")));
+        this.svg.classed("landing", true).attr("aria-label", "Atlyn Variance Chart. Add data to begin.");
+        const group = this.chartContainer.append("g").attr("aria-hidden", "true");
+        group.append("rect")
             .attr("width", width)
             .attr("height", height)
-            .attr("fill", this.isHighContrast ? this.highContrastColors?.background || "#fff" : "#fafafa");
-
-        // Icon representation
-        const iconGroup = this.chartContainer.append("g")
-            .attr("transform", `translate(${width/2 - 40}, ${height/2 - 50})`);
-
-        // Mini chart icon
-        iconGroup.append("rect").attr("x", 0).attr("y", 40).attr("width", 15).attr("height", 30).attr("fill", "#ccc");
-        iconGroup.append("rect").attr("x", 20).attr("y", 20).attr("width", 15).attr("height", 50).attr("fill", "#404040");
-        iconGroup.append("rect").attr("x", 40).attr("y", 50).attr("width", 15).attr("height", 20).attr("fill", "#4CAF50");
-        iconGroup.append("rect").attr("x", 60).attr("y", 30).attr("width", 15).attr("height", 40).attr("fill", "#ccc");
-
-        // Title
-        this.chartContainer.append("text")
+            .attr("fill", this.background);
+        group.append("text")
             .attr("x", width / 2)
-            .attr("y", height / 2 + 30)
+            .attr("y", height / 2 - 8)
             .attr("text-anchor", "middle")
-            .attr("fill", this.isHighContrast ? this.highContrastColors?.foreground || "#333" : "#333")
+            .attr("fill", this.foreground)
             .attr("font-size", "14px")
             .attr("font-weight", "bold")
             .text("Atlyn Variance Chart");
-
-        // Instructions
-        this.chartContainer.append("text")
+        group.append("text")
             .attr("x", width / 2)
-            .attr("y", height / 2 + 50)
+            .attr("y", height / 2 + 14)
             .attr("text-anchor", "middle")
-            .attr("fill", this.isHighContrast ? this.highContrastColors?.foreground || "#666" : "#666")
+            .attr("fill", this.foreground)
             .attr("font-size", "11px")
-            .text("Add Category, Actual, and Budget fields to start");
-
-        // Additional help text
-        this.chartContainer.append("text")
-            .attr("x", width / 2)
-            .attr("y", height / 2 + 68)
-            .attr("text-anchor", "middle")
-            .attr("fill", this.isHighContrast ? this.highContrastColors?.foreground || "#888" : "#888")
-            .attr("font-size", "10px")
-            .text("Use Format pane to switch chart types");
+            .text("Add Category and Actual fields to start");
     }
 
     private renderNoData(message: string): void {
-        const width = parseInt(this.svg.attr("width")) || 200;
-        const height = parseInt(this.svg.attr("height")) || 100;
-
+        const width = finiteDimension(Number(this.svg.attr("width")));
+        const height = finiteDimension(Number(this.svg.attr("height")));
+        this.svg.attr("aria-label", `Atlyn Variance Chart. ${message}`);
         this.chartContainer.append("text")
             .attr("x", width / 2)
             .attr("y", height / 2)
             .attr("text-anchor", "middle")
-            .attr("fill", this.isHighContrast ? this.highContrastColors?.foreground || "#666" : "#666")
-            .attr("font-size", "12px")
+            .attr("fill", this.foreground)
+            .attr("role", "status")
             .text(message);
+    }
+
+    private renderFailure(message: string): void {
+        this.chartContainer.selectAll("*").remove();
+        this.svg.attr("aria-label", `Atlyn Variance Chart error. ${message}`).attr("tabindex", 0);
+        const width = finiteDimension(Number(this.svg.attr("width")));
+        const height = finiteDimension(Number(this.svg.attr("height")));
+        this.chartContainer.append("rect")
+            .attr("width", width)
+            .attr("height", height)
+            .attr("fill", this.background)
+            .attr("aria-hidden", "true");
+        this.chartContainer.append("text")
+            .attr("x", width / 2)
+            .attr("y", height / 2)
+            .attr("text-anchor", "middle")
+            .attr("fill", this.foreground)
+            .attr("role", "alert")
+            .text(message);
+        this.announce(message);
+    }
+
+    private announce(message: string): void {
+        this.statusRegion.textContent = message;
+    }
+
+    private announceInteractionError(): void {
+        this.announce("The interaction could not be completed.");
     }
 
     public getFormattingModel(): powerbi.visuals.FormattingModel {

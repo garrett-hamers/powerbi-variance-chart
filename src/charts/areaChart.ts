@@ -1,9 +1,24 @@
 /**
- * Area Chart - Filled region under line series
+ * Area Chart - Filled region between each series and the zero baseline
  */
 import * as d3 from "d3";
 import { BaseChart, ChartSettings, ChartDimensions } from "./baseChart";
-import { ParsedData } from "../dataParser";
+import { ParsedData, FiniteValue, MeasureKey } from "../dataParser";
+
+interface Series {
+    key: MeasureKey;
+    color: string;
+    label: string;
+    opacity: number;
+}
+
+interface AreaPoint {
+    key: string;
+    value: FiniteValue;
+    sourceIndex: number | null;
+    sourceIndices: number[];
+    position: number;
+}
 
 export class AreaChart extends BaseChart {
     constructor(
@@ -17,88 +32,97 @@ export class AreaChart extends BaseChart {
 
     render(): void {
         if (this.chartWidth <= 0 || this.chartHeight <= 0) return;
-
-        const { dataPoints, hasBudget, hasPreviousYear, hasForecast } = this.data;
-        const margin = this.dimensions.margin;
-
-        this.container.attr("transform", `translate(${margin.left},${margin.top})`);
+        const { dataPoints } = this.data;
+        this.container.attr("transform", `translate(${this.dimensions.margin.left},${this.dimensions.margin.top})`);
         this.renderTitle();
 
-        const series: Array<{ key: string; color: string; label: string; opacity: number }> = [
-            { key: "actual", color: this.settings.colors.actual, label: "Actual", opacity: 0.4 }
-        ];
-        if (hasBudget) series.push({ key: "budget", color: this.settings.colors.budget, label: "Budget", opacity: 0.2 });
-        if (hasPreviousYear) series.push({ key: "previousYear", color: this.settings.colors.previousYear, label: "Previous Year", opacity: 0.2 });
-        if (hasForecast) series.push({ key: "forecast", color: this.settings.colors.forecast, label: "Forecast", opacity: 0.2 });
+        const series: Series[] = [{ key: "actual", color: this.settings.colors.actual, label: "Actual", opacity: 0.4 }];
+        if (this.data.hasBudget) series.push({ key: "budget", color: this.settings.colors.budget, label: "Plan", opacity: 0.2 });
+        if (this.data.hasPreviousYear) series.push({ key: "previousYear", color: this.settings.colors.previousYear, label: "Previous Year", opacity: 0.2 });
+        if (this.data.hasForecast) series.push({ key: "forecast", color: this.settings.colors.forecast, label: "Forecast", opacity: 0.2 });
 
-        const localMax = d3.max(dataPoints, d =>
-            Math.max(d.actual, d.budget, d.previousYear, d.forecast)
-        ) || 0;
-        const maxValue = this.getEffectiveMax(localMax);
-
-        const xScale = d3.scaleBand()
-            .domain(dataPoints.map(d => d.category))
+        const xScale = d3.scaleBand<string>()
+            .domain(this.categoryKeys())
             .range([0, this.chartWidth])
             .padding(0.1);
-
-        const yScale = d3.scaleLinear()
-            .domain([0, maxValue * 1.1])
-            .range([this.chartHeight, 0]);
-
-        this.renderXAxis(xScale, this.chartHeight);
+        const yScale = this.createValueScale(
+            dataPoints.flatMap(point => series.map(item => point[item.key])),
+            [this.chartHeight, 0]
+        );
+        this.renderXAxis(xScale, this.chartHeight, this.categoryLabels());
         this.renderYAxis(yScale);
 
-        const showLabels = this.settings.dataLabels?.show ?? false;
+        const showLabels = (this.settings.dataLabels?.show ?? false)
+            && this.settings.dataLabels.showValues;
         const fontSize = this.settings.dataLabels?.fontSize ?? this.settings.fontSize;
-
-        // Render areas (back to front so Actual is on top)
-        const reversedSeries = [...series].reverse();
-        reversedSeries.forEach(s => {
-            const seriesData = dataPoints
-                .map(d => ({ x: d.category, y: d[s.key] as number || 0 }))
-                .filter(d => d.y > 0);
-
-            if (seriesData.length > 0) {
-                // Filled area
-                const area = d3.area<{ x: string; y: number }>()
-                    .x(d => (xScale(d.x) || 0) + xScale.bandwidth() / 2)
-                    .y0(this.chartHeight)
-                    .y1(d => yScale(d.y));
-
+        [...series].reverse().forEach(item => {
+            const areaData: AreaPoint[] = dataPoints.map((point, position) => ({
+                key: this.pointKey(point, position),
+                value: point[item.key],
+                sourceIndex: point.index,
+                sourceIndices: point.sourceIndices,
+                position
+            }));
+            const area = d3.area<AreaPoint>()
+                .defined(point => point.value !== null)
+                .x(point => (xScale(point.key) ?? 0) + xScale.bandwidth() / 2)
+                .y0(yScale(0))
+                .y1(point => yScale(point.value as number));
+            const areaPath = area(areaData);
+            if (areaPath) {
                 this.container.append("path")
-                    .datum(seriesData)
-                    .attr("fill", s.color)
-                    .attr("fill-opacity", s.opacity)
-                    .attr("d", area);
-
-                // Line on top
-                const line = d3.line<{ x: string; y: number }>()
-                    .x(d => (xScale(d.x) || 0) + xScale.bandwidth() / 2)
-                    .y(d => yScale(d.y));
-
-                this.container.append("path")
-                    .datum(seriesData)
-                    .attr("fill", "none")
-                    .attr("stroke", s.color)
-                    .attr("stroke-width", 2)
-                    .attr("d", line);
-
-                // Data labels on actual series
-                if (showLabels && s.key === "actual") {
-                    seriesData.forEach(d => {
-                        this.container.append("text")
-                            .attr("x", (xScale(d.x) || 0) + xScale.bandwidth() / 2)
-                            .attr("y", yScale(d.y) - 8)
-                            .attr("text-anchor", "middle")
-                            .attr("fill", s.color)
-                            .attr("font-size", `${fontSize}px`)
-                            .text(this.formatValue(d.y));
-                    });
-                }
+                    .attr("class", `area-series area-${item.key}`)
+                    .attr("fill", this.settings.highContrast && item.key !== "actual" ? "none" : item.color)
+                    .attr("fill-opacity", item.opacity)
+                    .attr("d", areaPath);
             }
+
+            const line = d3.line<AreaPoint>()
+                .defined(point => point.value !== null)
+                .x(point => (xScale(point.key) ?? 0) + xScale.bandwidth() / 2)
+                .y(point => yScale(point.value as number));
+            const linePath = line(areaData);
+            if (linePath) {
+                this.container.append("path")
+                    .attr("fill", "none")
+                    .attr("stroke", item.color)
+                    .attr("stroke-width", 2)
+                    .attr("stroke-dasharray", this.settings.highContrast
+                        ? item.key === "actual" ? "none"
+                            : item.key === "budget" ? "6,3"
+                                : item.key === "previousYear" ? "2,2" : "8,2,2,2"
+                        : "none")
+                    .attr("d", linePath);
+            }
+
+            const values = areaData.map(point => point.value);
+            areaData.forEach(point => {
+                if (point.value === null) return;
+                const hitTarget = this.container.append("circle")
+                    .attr("class", "area-hit-target")
+                    .attr("data-dp-index", point.sourceIndex === null ? null : String(point.sourceIndex))
+                    .attr("data-source-indices", point.sourceIndices.join(","))
+                    .attr("cx", (xScale(point.key) ?? 0) + xScale.bandwidth() / 2)
+                    .attr("cy", yScale(point.value))
+                    .attr("r", 8)
+                    .attr("fill", "transparent")
+                    .attr("pointer-events", "all")
+                    .attr("aria-label", `${item.label}: ${this.formatValue(point.value, item.key)}`);
+                if (point.sourceIndex === null) hitTarget.classed("aggregate-point", true);
+                if (showLabels && item.key === "actual" && this.shouldShowLabel(point.position, areaData.length, values)) {
+                    this.container.append("text")
+                        .attr("x", (xScale(point.key) ?? 0) + xScale.bandwidth() / 2)
+                        .attr("y", yScale(point.value) - 8)
+                        .attr("text-anchor", "middle")
+                        .attr("fill", item.color)
+                        .attr("font-size", `${fontSize}px`)
+                        .text(this.formatValue(point.value, item.key));
+                }
+            });
         });
 
-        this.renderLegend(series.map(s => ({ label: s.label, color: s.color })));
+        this.renderCommentMarkers(xScale, yScale);
+        this.renderLegend(series.map(item => ({ label: item.label, color: item.color })));
         this.renderCommentBox();
     }
 }

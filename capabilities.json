@@ -1,6 +1,8 @@
 {
-    "supportsHighlight": true,
+    "supportsHighlight": false,
     "supportsKeyboardFocus": true,
+    "supportsLandingPage": true,
+    "supportsEmptyDataView": true,
     "supportsMultiVisualSelection": true,
     "supportsSynchronizingFilterState": true,
     "drilldown": {
@@ -95,14 +97,6 @@
                             { "value": "budget", "displayName": "vs Plan" },
                             { "value": "previousYear", "displayName": "vs Previous Year" },
                             { "value": "forecast", "displayName": "vs Forecast" }
-                        ]
-                    }
-                },
-                "orientation": {
-                    "type": {
-                        "enumeration": [
-                            { "value": "vertical", "displayName": "Vertical" },
-                            { "value": "horizontal", "displayName": "Horizontal" }
                         ]
                     }
                 },
@@ -345,9 +339,6 @@
                             { "value": "filter", "displayName": "Filter" }
                         ]
                     }
-                },
-                "enableTelemetry": {
-                    "type": { "bool": true }
                 }
             }
         },
@@ -451,7 +442,7 @@
                         { "bind": { "to": "previousYear" } },
                         { "bind": { "to": "budget" } },
                         { "bind": { "to": "forecast" } },
-                        { "bind": { "to": "tooltips" } }
+                        { "for": { "in": "tooltips" } }
                     ]
                 }
             }

@@ -3,35 +3,59 @@
  */
 import powerbi from "powerbi-visuals-api";
 import DataView = powerbi.DataView;
+import PrimitiveValue = powerbi.PrimitiveValue;
+import { formatModelValue, formatPrimitiveValue } from "./utils/formatting";
+
+export type FiniteValue = number | null;
+export type ComparisonType = "budget" | "previousYear" | "forecast";
+export type MeasureKey = "actual" | ComparisonType;
 
 export interface TooltipField {
     displayName: string;
     value: string;
+    format?: string;
 }
 
 export interface DataPoint {
     category: string;
     group: string;
-    actual: number;
-    budget: number;
-    previousYear: number;
-    forecast: number;
+    /** Raw model values used for identity/filtering; labels above are formatted for display. */
+    categoryValue?: PrimitiveValue;
+    groupValue?: PrimitiveValue;
+    /** Stable identity derived from the raw group value, independent of display formatting. */
+    groupKey?: string;
+    categoryFormat?: string;
+    groupFormat?: string;
+    actual: FiniteValue;
+    budget: FiniteValue;
+    previousYear: FiniteValue;
+    forecast: FiniteValue;
     comment: string;
-    // Auto-calculated variances
-    varianceToBudget: number;
-    varianceToBudgetPct: number;
-    varianceToPY: number;
-    varianceToPYPct: number;
-    varianceToFC: number;
-    varianceToFCPct: number;
+    varianceToBudget: FiniteValue;
+    varianceToBudgetPct: FiniteValue;
+    varianceToPY: FiniteValue;
+    varianceToPYPct: FiniteValue;
+    varianceToFC: FiniteValue;
+    varianceToFCPct: FiniteValue;
     tooltipFields?: TooltipField[];
-    // For waterfall
-    index: number;
+    /** Original categorical row. Aggregates and synthetic points do not have one. */
+    index: number | null;
+    /** Original rows represented by this point (one for normal points, many for Others). */
+    sourceIndices: number[];
+}
+
+export interface MeasureFormats {
+    actual?: string;
+    budget?: string;
+    previousYear?: string;
+    forecast?: string;
 }
 
 export interface ParsedData {
     dataPoints: DataPoint[];
     groups: string[];
+    /** Stable raw-value keys corresponding to groups, in display order. */
+    groupKeys?: string[];
     hasActual: boolean;
     hasBudget: boolean;
     hasPreviousYear: boolean;
@@ -39,121 +63,249 @@ export interface ParsedData {
     hasGroups: boolean;
     hasComments: boolean;
     totals: {
-        actual: number;
-        budget: number;
-        previousYear: number;
-        forecast: number;
+        actual: FiniteValue;
+        budget: FiniteValue;
+        previousYear: FiniteValue;
+        forecast: FiniteValue;
     };
     maxValue: number;
     minValue: number;
+    formats: MeasureFormats;
+    locale?: string;
 }
 
-export type ComparisonType = "budget" | "previousYear" | "forecast";
+interface ValueColumnInfo {
+    values: PrimitiveValue[];
+    format?: string;
+}
 
-export function parseDataView(dataView: DataView): ParsedData | null {
-    if (!dataView?.categorical?.categories?.[0] || !dataView.categorical.values) {
-        return null;
+interface TooltipColumnInfo extends ValueColumnInfo {
+    displayName: string;
+}
+
+export function toFiniteNumber(value: unknown): FiniteValue {
+    if (typeof value !== "number" || !Number.isFinite(value)) return null;
+    return Object.is(value, -0) ? 0 : value;
+}
+
+export function safeAdd(a: FiniteValue, b: FiniteValue): FiniteValue {
+    if (a === null || b === null) return null;
+    return toFiniteNumber(a + b);
+}
+
+export function safeSubtract(a: FiniteValue, b: FiniteValue): FiniteValue {
+    if (a === null || b === null) return null;
+    return toFiniteNumber(a - b);
+}
+
+export function calculatePercentage(variance: FiniteValue, base: FiniteValue): FiniteValue {
+    if (variance === null || base === null || base === 0) return null;
+    return toFiniteNumber((variance / Math.abs(base)) * 100);
+}
+
+export function finiteSum(values: FiniteValue[]): FiniteValue {
+    let total = 0;
+    let hasValue = false;
+    for (const value of values) {
+        if (value === null) continue;
+        const next = total + value;
+        if (!Number.isFinite(next)) return null;
+        total = next;
+        hasValue = true;
     }
+    return hasValue ? total : null;
+}
 
-    const categorical = dataView.categorical;
-    const allCategories = categorical.categories;
-    const values = categorical.values;
-
-    // Find category columns by role
-    let categoryValues: powerbi.PrimitiveValue[] = [];
-    let groupValues: powerbi.PrimitiveValue[] = [];
-    let commentValues: powerbi.PrimitiveValue[] = [];
-
-    for (const cat of allCategories) {
-        const role = cat.source.roles;
-        if (role) {
-            if (role["category"]) categoryValues = cat.values;
-            if (role["group"]) groupValues = cat.values;
-            if (role["comments"]) commentValues = cat.values;
+export function finiteStackExtents(values: FiniteValue[]): [number, number] {
+    let negative = 0;
+    let positive = 0;
+    for (const value of values) {
+        if (value === null) continue;
+        if (value >= 0) {
+            const next = safeAdd(positive, value);
+            if (next === null) {
+                return [
+                    Math.min(0, ...values.filter((item): item is number => item !== null && Number.isFinite(item) && item < 0)),
+                    Math.max(0, ...values.filter((item): item is number => item !== null && Number.isFinite(item) && item > 0))
+                ];
+            }
+            positive = next;
+        } else {
+            const next = safeAdd(negative, value);
+            if (next === null) {
+                return [
+                    Math.min(0, ...values.filter((item): item is number => item !== null && Number.isFinite(item) && item < 0)),
+                    Math.max(0, ...values.filter((item): item is number => item !== null && Number.isFinite(item) && item > 0))
+                ];
+            }
+            negative = next;
         }
     }
+    return [negative, positive];
+}
 
-    // Use first category if no specific role found
-    if (categoryValues.length === 0 && allCategories.length > 0) {
-        categoryValues = allCategories[0].values;
-    }
+function valueAt(column: ValueColumnInfo | undefined, index: number): FiniteValue {
+    return column ? toFiniteNumber(column.values[index]) : null;
+}
 
-    // Find measure columns by role
-    let actualValues: powerbi.PrimitiveValue[] = [];
-    let budgetValues: powerbi.PrimitiveValue[] = [];
-    let pyValues: powerbi.PrimitiveValue[] = [];
-    let forecastValues: powerbi.PrimitiveValue[] = [];
-    const tooltipColumns: Array<{ displayName: string; values: powerbi.PrimitiveValue[] }> = [];
+function textAt(values: PrimitiveValue[], index: number): string {
+    const value = values[index];
+    return value === null || value === undefined ? "" : String(value);
+}
 
-    for (const valueColumn of values) {
-        const roles = valueColumn.source.roles;
-        if (roles) {
-            if (roles["actual"]) actualValues = valueColumn.values;
-            if (roles["budget"]) budgetValues = valueColumn.values;
-            if (roles["previousYear"]) pyValues = valueColumn.values;
-            if (roles["forecast"]) forecastValues = valueColumn.values;
-            if (roles["tooltips"]) {
-                tooltipColumns.push({
-                    displayName: valueColumn.source.displayName || "Tooltip",
-                    values: valueColumn.values
-                });
+function rawAt(values: PrimitiveValue[], index: number): PrimitiveValue | undefined {
+    return values[index];
+}
+
+function primitiveKey(value: PrimitiveValue | undefined): string {
+    if (value instanceof Date) return `date:${value.getTime()}`;
+    return `${typeof value}:${String(value)}`;
+}
+
+export function getDataPointGroupKey(point: DataPoint): string {
+    return point.groupKey ?? primitiveKey(point.groupValue === undefined ? point.group : point.groupValue);
+}
+
+export function getGroupKeys(data: ParsedData): string[] {
+    if (data.groupKeys) return data.groupKeys;
+    return Array.from(new Set(data.dataPoints.map(getDataPointGroupKey)));
+}
+
+function varianceFields(actual: FiniteValue, comparison: FiniteValue): [FiniteValue, FiniteValue] {
+    const variance = safeSubtract(actual, comparison);
+    return [variance, calculatePercentage(variance, comparison)];
+}
+
+export function subsetParsedData(data: ParsedData, dataPoints: DataPoint[]): ParsedData {
+    let minValue = 0;
+    let maxValue = 0;
+    for (const point of dataPoints) {
+        for (const value of [
+            point.actual, point.budget, point.previousYear, point.forecast,
+            point.varianceToBudget, point.varianceToPY, point.varianceToFC
+        ]) {
+            if (value !== null) {
+                minValue = Math.min(minValue, value);
+                maxValue = Math.max(maxValue, value);
             }
         }
     }
 
-    const hasActual = actualValues.length > 0;
-    const hasBudget = budgetValues.length > 0;
-    const hasPreviousYear = pyValues.length > 0;
-    const hasForecast = forecastValues.length > 0;
-    const hasGroups = groupValues.length > 0;
-    const hasComments = commentValues.length > 0;
+    const groupKeys = data.hasGroups
+        ? Array.from(new Set(dataPoints.map(getDataPointGroupKey)))
+        : [];
+    const groupLabels = groupKeys.map(key =>
+        dataPoints.find(point => getDataPointGroupKey(point) === key)?.group ?? ""
+    );
 
-    if (!hasActual) {
+    return {
+        ...data,
+        dataPoints,
+        groups: groupLabels,
+        groupKeys,
+        hasGroups: data.hasGroups,
+        hasComments: dataPoints.some(point => point.comment.trim() !== ""),
+        totals: {
+            actual: finiteSum(dataPoints.map(point => point.actual)),
+            budget: data.hasBudget ? finiteSum(dataPoints.map(point => point.budget)) : null,
+            previousYear: data.hasPreviousYear ? finiteSum(dataPoints.map(point => point.previousYear)) : null,
+            forecast: data.hasForecast ? finiteSum(dataPoints.map(point => point.forecast)) : null
+        },
+        minValue,
+        maxValue
+    };
+}
+
+export function parseDataView(dataView: DataView, locale?: string): ParsedData | null {
+    if (!dataView?.categorical?.categories?.[0] || !dataView.categorical.values) {
         return null;
     }
 
+    const { categories, values } = dataView.categorical;
+    let categoryValues: PrimitiveValue[] = [];
+    let groupValues: PrimitiveValue[] = [];
+    let commentValues: PrimitiveValue[] = [];
+    let categoryFormat: string | undefined;
+    let groupFormat: string | undefined;
+
+    for (const column of categories) {
+        const roles = column.source.roles;
+        if (roles?.["category"]) {
+            categoryValues = column.values;
+            categoryFormat = column.source.format;
+        }
+        if (roles?.["group"]) {
+            groupValues = column.values;
+            groupFormat = column.source.format;
+        }
+        if (roles?.["comments"]) commentValues = column.values;
+    }
+    if (categoryValues.length === 0) {
+        categoryValues = categories[0].values;
+        categoryFormat = categories[0].source.format;
+    }
+
+    let actualColumn: ValueColumnInfo | undefined;
+    let budgetColumn: ValueColumnInfo | undefined;
+    let pyColumn: ValueColumnInfo | undefined;
+    let forecastColumn: ValueColumnInfo | undefined;
+    const tooltipColumns: TooltipColumnInfo[] = [];
+
+    for (const column of values) {
+        const info: ValueColumnInfo = {
+            values: column.values,
+            format: column.source.format
+        };
+        const roles = column.source.roles;
+        if (roles?.["actual"]) actualColumn = info;
+        if (roles?.["budget"]) budgetColumn = info;
+        if (roles?.["previousYear"]) pyColumn = info;
+        if (roles?.["forecast"]) forecastColumn = info;
+        if (roles?.["tooltips"]) {
+            tooltipColumns.push({
+                ...info,
+                displayName: column.source.displayName || "Tooltip"
+            });
+        }
+    }
+
+    if (!actualColumn) return null;
+
     const dataPoints: DataPoint[] = [];
-    const groupsSet = new Set<string>();
-    let maxValue = 0;
-    let minValue = 0;
 
     for (let i = 0; i < categoryValues.length; i++) {
-        const actual = Number(actualValues[i]) || 0;
-        const budget = hasBudget ? (Number(budgetValues[i]) || 0) : 0;
-        const previousYear = hasPreviousYear ? (Number(pyValues[i]) || 0) : 0;
-        const forecast = hasForecast ? (Number(forecastValues[i]) || 0) : 0;
-        const group = hasGroups ? String(groupValues[i] || "") : "";
-        const comment = hasComments ? String(commentValues[i] || "") : "";
-        const tooltipFields = tooltipColumns
-            .map((column) => {
-                const rawValue = column.values[i];
-                if (rawValue == null || rawValue === "") {
-                    return null;
-                }
-                return { displayName: column.displayName, value: String(rawValue) };
-            })
-            .filter((field): field is TooltipField => field !== null);
+        const actual = valueAt(actualColumn, i);
+        const budget = valueAt(budgetColumn, i);
+        const previousYear = valueAt(pyColumn, i);
+        const forecast = valueAt(forecastColumn, i);
+        const [varianceToBudget, varianceToBudgetPct] = varianceFields(actual, budget);
+        const [varianceToPY, varianceToPYPct] = varianceFields(actual, previousYear);
+        const [varianceToFC, varianceToFCPct] = varianceFields(actual, forecast);
 
-        if (group) groupsSet.add(group);
+        const tooltipFields = tooltipColumns.flatMap(column => {
+            const rawValue = column.values[i];
+            if (rawValue === null || rawValue === undefined || rawValue === "") return [];
+            const formatted = typeof rawValue === "number"
+                ? formatModelValue(toFiniteNumber(rawValue), column.format, locale)
+                : formatPrimitiveValue(rawValue, column.format, locale);
+            return formatted === null || formatted === ""
+                ? []
+                : [{ displayName: column.displayName, value: formatted, format: column.format }];
+        });
 
-        // Calculate variances
-        const varianceToBudget = actual - budget;
-        const varianceToBudgetPct = calculatePercentage(varianceToBudget, budget);
-        
-        const varianceToPY = actual - previousYear;
-        const varianceToPYPct = calculatePercentage(varianceToPY, previousYear);
-        
-        const varianceToFC = actual - forecast;
-        const varianceToFCPct = calculatePercentage(varianceToFC, forecast);
-
-        const dataPoint: DataPoint = {
-            category: String(categoryValues[i]),
-            group,
+        dataPoints.push({
+            category: formatPrimitiveValue(rawAt(categoryValues, i), categoryFormat, locale),
+            group: formatPrimitiveValue(rawAt(groupValues, i), groupFormat, locale),
+            categoryValue: rawAt(categoryValues, i),
+            groupValue: rawAt(groupValues, i),
+            groupKey: groupValues.length > 0 ? primitiveKey(rawAt(groupValues, i)) : "",
+            categoryFormat,
+            groupFormat,
             actual,
             budget,
             previousYear,
             forecast,
-            comment,
+            comment: textAt(commentValues, i),
             varianceToBudget,
             varianceToBudgetPct,
             varianceToPY,
@@ -161,85 +313,73 @@ export function parseDataView(dataView: DataView): ParsedData | null {
             varianceToFC,
             varianceToFCPct,
             tooltipFields,
-            index: i
-        };
-
-        dataPoints.push(dataPoint);
-
-        // Track max/min for scale
-        const allValues = [actual, budget, previousYear, forecast, 
-                          varianceToBudget, varianceToPY, varianceToFC];
-        maxValue = Math.max(maxValue, ...allValues.filter(v => v !== 0));
-        minValue = Math.min(minValue, ...allValues);
+            index: i,
+            sourceIndices: [i]
+        });
     }
 
-    // Calculate totals
-    const totals = {
-        actual: dataPoints.reduce((sum, d) => sum + d.actual, 0),
-        budget: dataPoints.reduce((sum, d) => sum + d.budget, 0),
-        previousYear: dataPoints.reduce((sum, d) => sum + d.previousYear, 0),
-        forecast: dataPoints.reduce((sum, d) => sum + d.forecast, 0)
-    };
-
-    return {
-        dataPoints,
-        groups: Array.from(groupsSet),
+    const hasActual = dataPoints.some(point => point.actual !== null);
+    const hasBudget = dataPoints.some(point => point.budget !== null);
+    const hasPreviousYear = dataPoints.some(point => point.previousYear !== null);
+    const hasForecast = dataPoints.some(point => point.forecast !== null);
+    const parsed: ParsedData = {
+        dataPoints: [],
+        groups: [],
+        groupKeys: [],
         hasActual,
         hasBudget,
         hasPreviousYear,
         hasForecast,
-        hasGroups,
-        hasComments,
-        totals,
-        maxValue,
-        minValue
+        hasGroups: groupValues.length > 0,
+        hasComments: commentValues.length > 0,
+        totals: { actual: null, budget: null, previousYear: null, forecast: null },
+        maxValue: 0,
+        minValue: 0,
+        formats: {
+            actual: actualColumn.format,
+            budget: budgetColumn?.format,
+            previousYear: pyColumn?.format,
+            forecast: forecastColumn?.format
+        },
+        locale
     };
+    return subsetParsedData(parsed, dataPoints);
 }
 
-function calculatePercentage(variance: number, base: number): number {
-    if (base === 0) return 0;
-    return (variance / Math.abs(base)) * 100;
-}
-
-/**
- * Get variance value based on comparison type
- */
-export function getVariance(dataPoint: DataPoint, comparisonType: ComparisonType): number {
+export function getVariance(dataPoint: DataPoint, comparisonType: ComparisonType): FiniteValue {
     switch (comparisonType) {
         case "budget": return dataPoint.varianceToBudget;
         case "previousYear": return dataPoint.varianceToPY;
         case "forecast": return dataPoint.varianceToFC;
-        default: return dataPoint.varianceToBudget;
     }
 }
 
-/**
- * Get variance percentage based on comparison type
- */
-export function getVariancePct(dataPoint: DataPoint, comparisonType: ComparisonType): number {
+export function getVariancePct(dataPoint: DataPoint, comparisonType: ComparisonType): FiniteValue {
     switch (comparisonType) {
         case "budget": return dataPoint.varianceToBudgetPct;
         case "previousYear": return dataPoint.varianceToPYPct;
         case "forecast": return dataPoint.varianceToFCPct;
-        default: return dataPoint.varianceToBudgetPct;
     }
 }
 
-/**
- * Get comparison value based on type
- */
-export function getComparisonValue(dataPoint: DataPoint, comparisonType: ComparisonType): number {
-    switch (comparisonType) {
-        case "budget": return dataPoint.budget;
-        case "previousYear": return dataPoint.previousYear;
-        case "forecast": return dataPoint.forecast;
-        default: return dataPoint.budget;
-    }
+export function getComparisonValue(dataPoint: DataPoint, comparisonType: ComparisonType): FiniteValue {
+    return dataPoint[comparisonType];
 }
 
-/**
- * Top N + Others - Filter and aggregate data
- */
+export function getAvailableComparisonType(
+    data: ParsedData,
+    preferred: ComparisonType
+): ComparisonType | null {
+    const availability: Record<ComparisonType, boolean> = {
+        budget: data.hasBudget,
+        previousYear: data.hasPreviousYear,
+        forecast: data.hasForecast
+    };
+    if (availability[preferred]) return preferred;
+    return (["budget", "previousYear", "forecast"] as ComparisonType[])
+        .find(type => availability[type]) ?? null;
+}
+
 export interface TopNOptions {
     enable: boolean;
     count: number;
@@ -250,61 +390,82 @@ export interface TopNOptions {
     comparisonType: ComparisonType;
 }
 
+function sortableValue(value: FiniteValue, direction: string): number {
+    if (value !== null) return value;
+    return direction === "asc" ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY;
+}
+
+function aggregateMeasure(points: DataPoint[], key: MeasureKey): FiniteValue {
+    return finiteSum(points.map(point => point[key]));
+}
+
 export function applyTopN(data: ParsedData, options: TopNOptions): ParsedData {
-    if (!options.enable || data.dataPoints.length <= options.count) {
-        return data;
-    }
+    if (!options.enable) return data;
+    const count = Math.max(0, Math.floor(options.count));
 
-    const sorted = [...data.dataPoints].sort((a, b) => {
-        let valA: number, valB: number;
-        
+    const rankPoints = (points: DataPoint[], group: string, groupKey: string): DataPoint[] => {
+        if (points.length <= count) return points;
+        const sorted = [...points].sort((a, b) => {
         if (options.sortBy === "name") {
-            const cmp = a.category.localeCompare(b.category);
-            return options.sortDirection === "asc" ? cmp : -cmp;
-        } else if (options.sortBy === "variance") {
-            valA = getVariance(a, options.comparisonType);
-            valB = getVariance(b, options.comparisonType);
-        } else {
-            valA = a.actual;
-            valB = b.actual;
+            const comparison = a.category.localeCompare(b.category);
+            return options.sortDirection === "asc" ? comparison : -comparison;
         }
-        
-        return options.sortDirection === "asc" ? valA - valB : valB - valA;
-    });
+        const aValue = options.sortBy === "variance"
+            ? getVariance(a, options.comparisonType)
+            : a.actual;
+        const bValue = options.sortBy === "variance"
+            ? getVariance(b, options.comparisonType)
+            : b.actual;
+        const difference = sortableValue(aValue, options.sortDirection) - sortableValue(bValue, options.sortDirection);
+        return options.sortDirection === "asc" ? difference : -difference;
+        });
+        const topN = sorted.slice(0, count);
+        const rest = sorted.slice(count);
 
-    const topN = sorted.slice(0, options.count);
-    const rest = sorted.slice(options.count);
+        if (!options.showOthers || rest.length === 0) return topN;
+        const actual = aggregateMeasure(rest, "actual");
+        const budget = data.hasBudget ? aggregateMeasure(rest, "budget") : null;
+        const previousYear = data.hasPreviousYear ? aggregateMeasure(rest, "previousYear") : null;
+        const forecast = data.hasForecast ? aggregateMeasure(rest, "forecast") : null;
+        const [varianceToBudget, varianceToBudgetPct] = varianceFields(actual, budget);
+        const [varianceToPY, varianceToPYPct] = varianceFields(actual, previousYear);
+        const [varianceToFC, varianceToFCPct] = varianceFields(actual, forecast);
 
-    if (options.showOthers && rest.length > 0) {
-        const othersPoint: DataPoint = {
+        topN.push({
             category: options.othersLabel,
-            group: "",
-            actual: rest.reduce((s, d) => s + d.actual, 0),
-            budget: rest.reduce((s, d) => s + d.budget, 0),
-            previousYear: rest.reduce((s, d) => s + d.previousYear, 0),
-            forecast: rest.reduce((s, d) => s + d.forecast, 0),
+            group,
+            categoryValue: options.othersLabel,
+            groupValue: rest[0]?.groupValue,
+            groupKey,
+            categoryFormat: undefined,
+            groupFormat: rest[0]?.groupFormat,
+            actual,
+            budget,
+            previousYear,
+            forecast,
             comment: "",
-            varianceToBudget: 0,
-            varianceToBudgetPct: 0,
-            varianceToPY: 0,
-            varianceToPYPct: 0,
-            varianceToFC: 0,
-            varianceToFCPct: 0,
-            index: options.count
-        };
-        // Recalculate variances for Others
-        othersPoint.varianceToBudget = othersPoint.actual - othersPoint.budget;
-        othersPoint.varianceToBudgetPct = calculatePercentage(othersPoint.varianceToBudget, othersPoint.budget);
-        othersPoint.varianceToPY = othersPoint.actual - othersPoint.previousYear;
-        othersPoint.varianceToPYPct = calculatePercentage(othersPoint.varianceToPY, othersPoint.previousYear);
-        othersPoint.varianceToFC = othersPoint.actual - othersPoint.forecast;
-        othersPoint.varianceToFCPct = calculatePercentage(othersPoint.varianceToFC, othersPoint.forecast);
+            varianceToBudget,
+            varianceToBudgetPct,
+            varianceToPY,
+            varianceToPYPct,
+            varianceToFC,
+            varianceToFCPct,
+            tooltipFields: [],
+            index: null,
+            sourceIndices: rest.flatMap(point => point.sourceIndices)
+        });
+        return topN;
+    };
 
-        topN.push(othersPoint);
+    if (!data.hasGroups) {
+        return subsetParsedData(data, rankPoints(data.dataPoints, "", ""));
     }
 
-    return {
-        ...data,
-        dataPoints: topN
-    };
+    const ranked: DataPoint[] = [];
+    for (const groupKey of getGroupKeys(data)) {
+        const points = data.dataPoints.filter(point => getDataPointGroupKey(point) === groupKey);
+        const group = points[0]?.group ?? "";
+        ranked.push(...rankPoints(points, group, groupKey));
+    }
+    return subsetParsedData(data, ranked);
 }

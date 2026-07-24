@@ -1,9 +1,14 @@
 /**
- * Dot Chart - Action dots for variance visualization (ZebraBI-style)
+ * Dot Chart - Actual/comparison dots with variance encoding
  */
 import * as d3 from "d3";
 import { BaseChart, ChartSettings, ChartDimensions } from "./baseChart";
-import { ParsedData } from "../dataParser";
+import { ParsedData, FiniteValue } from "../dataParser";
+
+interface DotPoint {
+    key: string;
+    value: FiniteValue;
+}
 
 export class DotChart extends BaseChart {
     constructor(
@@ -17,129 +22,109 @@ export class DotChart extends BaseChart {
 
     render(): void {
         if (this.chartWidth <= 0 || this.chartHeight <= 0) return;
-
         const { dataPoints } = this.data;
-        const margin = this.dimensions.margin;
-
-        this.container.attr("transform", `translate(${margin.left},${margin.top})`);
+        const comparisonPresentation = this.getComparisonPresentation();
+        this.container.attr("transform", `translate(${this.dimensions.margin.left},${this.dimensions.margin.top})`);
         this.renderTitle();
-
-        const localMax = d3.max(dataPoints, d => {
-            const comparison = this.getComparisonForPoint(d);
-            return Math.max(d.actual, comparison);
-        }) || 0;
-        const maxValue = this.getEffectiveMax(localMax);
-
-        const xScale = d3.scaleBand()
-            .domain(dataPoints.map(d => d.category))
-            .range([0, this.chartWidth])
-            .padding(0.3);
-
-        const yScale = d3.scaleLinear()
-            .domain([0, maxValue * 1.15])
-            .range([this.chartHeight, 0]);
-
-        this.renderXAxis(xScale, this.chartHeight);
+        const xScale = d3.scaleBand<string>().domain(this.categoryKeys()).range([0, this.chartWidth]).padding(0.3);
+        const yScale = this.createValueScale(
+            dataPoints.flatMap(point => [point.actual, this.getComparisonForPoint(point)]),
+            [this.chartHeight, 0],
+            0.15
+        );
+        this.renderXAxis(xScale, this.chartHeight, this.categoryLabels());
         this.renderYAxis(yScale);
+
+        if (comparisonPresentation) {
+            const comparisonData: DotPoint[] = dataPoints.map((point, position) => ({
+                key: this.pointKey(point, position),
+                value: this.getComparisonForPoint(point)
+            }));
+            const line = d3.line<DotPoint>()
+                .defined(point => point.value !== null)
+                .x(point => (xScale(point.key) ?? 0) + xScale.bandwidth() / 2)
+                .y(point => yScale(point.value as number));
+            const path = line(comparisonData);
+            if (path) {
+                this.container.append("path")
+                    .attr("fill", "none")
+                    .attr("stroke", comparisonPresentation.color)
+                    .attr("stroke-width", 1.5)
+                    .attr("stroke-dasharray", "4,3")
+                    .attr("d", path);
+            }
+        }
 
         const showLabels = this.settings.dataLabels?.show ?? false;
         const fontSize = this.settings.dataLabels?.fontSize ?? this.settings.fontSize;
+        const varianceValues = dataPoints.map(point => this.getVarianceForPoint(point));
+        dataPoints.forEach((point, position) => {
+            const cx = (xScale(this.pointKey(point, position)) ?? 0) + xScale.bandwidth() / 2;
+            const comparison = this.getComparisonForPoint(point);
+            const varianceColor = this.getVarianceColorForPoint(point);
+            const sourceIndex = point.index === null ? null : String(point.index);
+            const sourceIndices = point.sourceIndices.join(",");
 
-        // Draw reference line connecting comparison values
-        const comparisonData = dataPoints.map(d => ({
-            x: d.category,
-            y: this.getComparisonForPoint(d)
-        })).filter(d => d.y > 0);
-
-        if (comparisonData.length > 0) {
-            const line = d3.line<{ x: string; y: number }>()
-                .x(d => (xScale(d.x) || 0) + xScale.bandwidth() / 2)
-                .y(d => yScale(d.y));
-
-            this.container.append("path")
-                .datum(comparisonData)
-                .attr("fill", "none")
-                .attr("stroke", this.settings.colors.budget)
-                .attr("stroke-width", 1.5)
-                .attr("stroke-dasharray", "4,3")
-                .attr("d", line);
-        }
-
-        // Draw dots for each data point
-        dataPoints.forEach((d, di) => {
-            const cx = (xScale(d.category) || 0) + xScale.bandwidth() / 2;
-            const comparison = this.getComparisonForPoint(d);
-            const variance = this.getVarianceForPoint(d);
-            const varianceColor = this.getVarianceColorForPoint(d);
-
-            // Comparison dot (hollow)
-            if (comparison > 0) {
+            if (comparisonPresentation && comparison !== null) {
                 this.container.append("circle")
-                    .attr("data-dp-index", String(di))
-                    .attr("cx", cx)
-                    .attr("cy", yScale(comparison))
-                    .attr("r", 5)
+                    .attr("data-dp-index", sourceIndex)
+                    .attr("data-source-indices", sourceIndices)
+                    .attr("cx", cx).attr("cy", yScale(comparison)).attr("r", 5)
                     .attr("fill", "none")
-                    .attr("stroke", this.settings.colors.budget)
+                    .attr("stroke", comparisonPresentation.color)
                     .attr("stroke-width", 2);
             }
-
-            // Actual dot (filled, sized by variance magnitude)
-            const absVariancePct = Math.abs(this.getVariancePctForPoint(d));
-            const dotRadius = Math.min(12, Math.max(5, 5 + absVariancePct / 10));
-
+            if (point.actual === null) return;
+            const pct = this.getVariancePctForPoint(point);
+            const dotRadius = pct === null ? 5 : Math.min(12, Math.max(5, 5 + Math.abs(pct) / 10));
             this.container.append("circle")
-                .attr("data-dp-index", String(di))
-                .attr("cx", cx)
-                .attr("cy", yScale(d.actual))
-                .attr("r", dotRadius)
-                .attr("fill", varianceColor)
+                .attr("data-dp-index", sourceIndex)
+                .attr("data-source-indices", sourceIndices)
+                .attr("cx", cx).attr("cy", yScale(point.actual)).attr("r", dotRadius)
+                .attr("fill", this.settings.highContrast && this.getVarianceForPoint(point) !== null
+                    && (this.getVarianceForPoint(point) ?? 0) < 0
+                    ? this.settings.background
+                    : varianceColor)
                 .attr("fill-opacity", 0.8)
-                .attr("stroke", varianceColor)
-                .attr("stroke-width", 1.5);
-
-            // Connecting line between comparison and actual
-            if (comparison > 0 && d.actual > 0) {
+                .attr("stroke", varianceColor).attr("stroke-width", 1.5);
+            if (comparison !== null) {
                 this.container.append("line")
-                    .attr("x1", cx)
-                    .attr("x2", cx)
-                    .attr("y1", yScale(comparison))
-                    .attr("y2", yScale(d.actual))
-                    .attr("stroke", varianceColor)
-                    .attr("stroke-width", 1.5)
-                    .attr("stroke-dasharray", "2,2");
+                    .attr("x1", cx).attr("x2", cx)
+                    .attr("y1", yScale(comparison)).attr("y2", yScale(point.actual))
+                    .attr("stroke", varianceColor).attr("stroke-width", 1.5)
+                    .attr("stroke-dasharray", this.settings.highContrast
+                        && this.getVarianceForPoint(point) !== null
+                        && (this.getVarianceForPoint(point) ?? 0) < 0
+                        ? "2,2"
+                        : "5,2");
             }
-
-            // Labels
-            if (showLabels) {
-                // Variance percentage label
-                const labelText = this.formatVarianceLabel(d);
+            const varianceLabel = this.formatVarianceLabel(point);
+            if (
+                showLabels
+                && comparisonPresentation
+                && varianceLabel
+                && this.shouldShowLabel(position, dataPoints.length, varianceValues)
+            ) {
                 this.container.append("text")
-                    .attr("x", cx)
-                    .attr("y", yScale(d.actual) - dotRadius - 4)
-                    .attr("text-anchor", "middle")
-                    .attr("fill", varianceColor)
-                    .attr("font-size", `${fontSize}px`)
-                    .attr("font-weight", "bold")
-                    .text(labelText);
+                    .attr("x", cx).attr("y", yScale(point.actual) - dotRadius - 4)
+                    .attr("text-anchor", "middle").attr("fill", varianceColor)
+                    .attr("font-size", `${fontSize}px`).attr("font-weight", "bold")
+                    .text(varianceLabel);
             }
         });
 
-        const comparisonLabel = this.getComparisonLabel();
-        this.renderLegend([
-            { label: comparisonLabel, color: this.settings.colors.budget, outlined: true },
-            { label: "Actual", color: this.settings.colors.actual },
-            { label: "+Variance", color: this.settings.colors.positiveVariance },
-            { label: "-Variance", color: this.settings.colors.negativeVariance }
-        ]);
-        this.renderCommentBox();
-    }
-
-    private getComparisonLabel(): string {
-        switch (this.settings.comparisonType) {
-            case "previousYear": return "Previous Year";
-            case "forecast": return "Forecast";
-            default: return "Plan";
+        this.renderCommentMarkers(xScale, yScale);
+        const legend: Array<{ label: string; color: string; outlined?: boolean }> = [
+            { label: "Actual", color: this.settings.colors.actual }
+        ];
+        if (comparisonPresentation) {
+            legend.unshift({ label: comparisonPresentation.label, color: comparisonPresentation.color, outlined: true });
+            legend.push(
+                { label: "+Variance", color: this.settings.colors.positiveVariance },
+                { label: "−Variance", color: this.settings.colors.negativeVariance }
+            );
         }
+        this.renderLegend(legend);
+        this.renderCommentBox();
     }
 }

@@ -3,121 +3,106 @@
  */
 import * as d3 from "d3";
 import { BaseChart, ChartSettings, ChartDimensions } from "./baseChart";
-import { ParsedData, DataPoint } from "../dataParser";
+import { ParsedData, DataPoint, FiniteValue, MeasureKey, finiteStackExtents, safeAdd } from "../dataParser";
+
+interface Series {
+    key: MeasureKey;
+    color: string;
+    label: string;
+}
 
 export class ColumnChart extends BaseChart {
-    private stacked: boolean;
-
     constructor(
         container: d3.Selection<SVGGElement, unknown, null, undefined>,
         data: ParsedData,
         settings: ChartSettings,
         dimensions: ChartDimensions,
-        stacked: boolean = false
+        private readonly stacked: boolean = false
     ) {
         super(container, data, settings, dimensions);
-        this.stacked = stacked;
     }
 
     render(): void {
         if (this.chartWidth <= 0 || this.chartHeight <= 0) return;
-
-        const { dataPoints, hasBudget, hasPreviousYear, hasForecast } = this.data;
-        const margin = this.dimensions.margin;
-
-        this.container.attr("transform", `translate(${margin.left},${margin.top})`);
-
-        // Render title if enabled
+        const { dataPoints } = this.data;
+        this.container.attr("transform", `translate(${this.dimensions.margin.left},${this.dimensions.margin.top})`);
         this.renderTitle();
 
-        // Determine which series to show
-        const series: Array<{ key: string; color: string; label: string }> = [
+        const series: Series[] = [
             { key: "actual", color: this.settings.colors.actual, label: "Actual" }
         ];
-        
-        const selectedComparison =
-            this.settings.comparisonType === "previousYear"
-                ? (hasPreviousYear ? { key: "previousYear", color: this.settings.colors.previousYear, label: "Previous Year" } : null)
-                : this.settings.comparisonType === "forecast"
-                    ? (hasForecast ? { key: "forecast", color: this.settings.colors.forecast, label: "Forecast" } : null)
-                    : (hasBudget ? { key: "budget", color: this.settings.colors.budget, label: "Budget" } : null);
-        if (selectedComparison) {
-            series.push(selectedComparison);
+        const comparison = this.getComparisonPresentation();
+        if (comparison) series.push(comparison);
+
+        const extentValues: FiniteValue[] = [];
+        if (this.stacked) {
+            for (const point of dataPoints) {
+                const values = series.map(item => point[item.key]);
+                extentValues.push(...finiteStackExtents(values));
+            }
+        } else {
+            for (const point of dataPoints) {
+                extentValues.push(...series.map(item => point[item.key]));
+            }
         }
 
-        // Calculate max value
-        const localMax = d3.max(dataPoints, d => {
-            const seriesValues = series.map(s => Number((d as any)[s.key]) || 0);
-            if (this.stacked) {
-                return seriesValues.reduce((sum, value) => sum + Math.max(0, value), 0);
-            }
-            return d3.max(seriesValues) || 0;
-        }) || 0;
-        const maxValue = this.getEffectiveMax(localMax);
+        const keys = this.categoryKeys();
+        const xScale = d3.scaleBand<string>().domain(keys).range([0, this.chartWidth]).padding(0.2);
+        const yScale = this.createValueScale(extentValues, [this.chartHeight, 0]);
 
-        // Scales
-        const xScale = d3.scaleBand()
-            .domain(dataPoints.map(d => d.category))
-            .range([0, this.chartWidth])
-            .padding(0.2);
-
-        const yScale = d3.scaleLinear()
-            .domain([0, maxValue * 1.1])
-            .range([this.chartHeight, 0]);
-
-        // Render axes
-        this.renderXAxis(xScale, this.chartHeight);
+        this.renderXAxis(xScale, this.chartHeight, this.categoryLabels());
         this.renderYAxis(yScale);
-
         if (this.stacked) {
             this.renderStacked(dataPoints, series, xScale, yScale);
         } else {
             this.renderGrouped(dataPoints, series, xScale, yScale);
         }
-
-        // Legend
-        this.renderLegend(series.map(s => ({ label: s.label, color: s.color })));
-
-        // Render Comment Box
+        this.renderCommentMarkers(xScale, yScale);
+        this.renderLegend(series.map(item => ({ label: item.label, color: item.color })));
         this.renderCommentBox();
     }
 
     private renderGrouped(
         dataPoints: DataPoint[],
-        series: Array<{ key: string; color: string; label: string }>,
+        series: Series[],
         xScale: d3.ScaleBand<string>,
         yScale: d3.ScaleLinear<number, number>
     ): void {
-        const barWidth = xScale.bandwidth() / series.length;
-        const showLabels = this.settings.dataLabels?.show ?? this.settings.showVarianceLabels;
+        const barWidth = Math.max(0, xScale.bandwidth() / Math.max(1, series.length));
+        const showLabels = (this.settings.dataLabels?.show ?? this.settings.showVarianceLabels)
+            && this.settings.dataLabels.showValues;
         const fontSize = this.settings.dataLabels?.fontSize ?? this.settings.fontSize;
+        const allValues = dataPoints.map(point => point.actual);
+        const baseline = yScale(0);
 
-        const allValues = dataPoints.map(d => d.actual || 0);
+        dataPoints.forEach((point, pointPosition) => {
+            const xPos = xScale(this.pointKey(point, pointPosition)) ?? 0;
+            series.forEach((item, seriesPosition) => {
+                const value = point[item.key];
+                if (value === null) return;
+                const valueY = yScale(value);
+                const rect = this.container.append("rect")
+                    .attr("data-dp-index", point.index === null ? null : String(point.index))
+                    .attr("data-source-indices", point.sourceIndices.join(","))
+                    .attr("x", xPos + seriesPosition * barWidth)
+                    .attr("y", Math.min(valueY, baseline))
+                    .attr("width", Math.max(0, barWidth - 2))
+                    .attr("height", Math.abs(baseline - valueY))
+                    .attr("fill", this.settings.highContrast && item.key !== "actual"
+                        ? this.settings.background
+                        : item.color)
+                    .attr("stroke", this.settings.highContrast ? this.settings.foreground : "none")
+                    .attr("stroke-dasharray", this.settings.highContrast && item.key !== "actual" ? "4,2" : null);
+                if (point.index === null) rect.attr("class", "aggregate-point");
 
-        dataPoints.forEach((d, di) => {
-            const xPos = xScale(d.category) || 0;
-
-            series.forEach((s, i) => {
-                const value = d[s.key] || 0;
-                if (value > 0) {
-                    this.container.append("rect")
-                        .attr("data-dp-index", String(di))
-                        .attr("x", xPos + i * barWidth)
-                        .attr("y", yScale(value))
-                        .attr("width", barWidth - 2)
-                        .attr("height", Math.max(0, this.chartHeight - yScale(value)))
-                        .attr("fill", s.color);
-
-                    // Data labels
-                    if (showLabels && this.shouldShowLabel(di, dataPoints.length, allValues)) {
-                        this.container.append("text")
-                            .attr("x", xPos + i * barWidth + (barWidth - 2) / 2)
-                            .attr("y", yScale(value) - 5)
-                            .attr("text-anchor", "middle")
-                            .attr("fill", s.color)
-                            .attr("font-size", `${fontSize}px`)
-                            .text(this.formatValue(value));
-                    }
+                if (showLabels && this.shouldShowLabel(pointPosition, dataPoints.length, allValues)) {
+                    this.container.append("text")
+                        .attr("x", xPos + seriesPosition * barWidth + Math.max(0, barWidth - 2) / 2)
+                        .attr("y", value >= 0 ? valueY - 5 : valueY + fontSize + 3)
+                        .attr("text-anchor", "middle")
+                        .attr("fill", item.color)
+                        .attr("font-size", `${fontSize}px`)
+                        .text(this.formatValue(value, item.key));
                 }
             });
         });
@@ -125,43 +110,54 @@ export class ColumnChart extends BaseChart {
 
     private renderStacked(
         dataPoints: DataPoint[],
-        series: Array<{ key: string; color: string; label: string }>,
+        series: Series[],
         xScale: d3.ScaleBand<string>,
         yScale: d3.ScaleLinear<number, number>
     ): void {
         const barWidth = xScale.bandwidth();
-        const showLabels = this.settings.dataLabels?.show ?? this.settings.showVarianceLabels;
+        const showLabels = (this.settings.dataLabels?.show ?? this.settings.showVarianceLabels)
+            && this.settings.dataLabels.showValues;
         const fontSize = this.settings.dataLabels?.fontSize ?? this.settings.fontSize;
+        const allValues = dataPoints.map(point => point.actual);
 
-        const allValues = dataPoints.map(d => d.actual || 0);
+        dataPoints.forEach((point, pointPosition) => {
+            const xPos = xScale(this.pointKey(point, pointPosition)) ?? 0;
+            let positiveBase = 0;
+            let negativeBase = 0;
+            series.forEach(item => {
+                const value = point[item.key];
+                if (value === null) return;
+                const start = value >= 0 ? positiveBase : negativeBase;
+                const end = safeAdd(start, value);
+                if (end === null) return;
+                if (value >= 0) positiveBase = end;
+                else negativeBase = end;
 
-        dataPoints.forEach((d, di) => {
-            const xPos = xScale(d.category) || 0;
-            let stackBase = 0;
-
-            series.forEach(s => {
-                const value = d[s.key] || 0;
-                if (value > 0) {
-                    this.container.append("rect")
-                        .attr("data-dp-index", String(di))
-                        .attr("x", xPos)
-                        .attr("y", yScale(stackBase + value))
-                        .attr("width", barWidth)
-                        .attr("height", Math.max(0, yScale(stackBase) - yScale(stackBase + value)))
-                        .attr("fill", s.color);
-                    stackBase += value;
-                }
+                const rect = this.container.append("rect")
+                    .attr("data-dp-index", point.index === null ? null : String(point.index))
+                    .attr("data-source-indices", point.sourceIndices.join(","))
+                    .attr("x", xPos)
+                    .attr("y", Math.min(yScale(start), yScale(end)))
+                    .attr("width", barWidth)
+                    .attr("height", Math.abs(yScale(start) - yScale(end)))
+                    .attr("fill", this.settings.highContrast && item.key !== "actual"
+                        ? this.settings.background
+                        : item.color)
+                    .attr("stroke", this.settings.highContrast ? this.settings.foreground : "none")
+                    .attr("stroke-dasharray", this.settings.highContrast && item.key !== "actual" ? "4,2" : null);
+                if (point.index === null) rect.attr("class", "aggregate-point");
             });
 
-            // Show total label on top of stack
-            if (showLabels && stackBase > 0 && this.shouldShowLabel(di, dataPoints.length, allValues)) {
+            if (showLabels && this.shouldShowLabel(pointPosition, dataPoints.length, allValues)) {
+                const total = positiveBase + negativeBase;
+                const labelExtent = total >= 0 ? positiveBase : negativeBase;
                 this.container.append("text")
                     .attr("x", xPos + barWidth / 2)
-                    .attr("y", yScale(stackBase) - 5)
+                    .attr("y", total >= 0 ? yScale(labelExtent) - 5 : yScale(labelExtent) + fontSize + 3)
                     .attr("text-anchor", "middle")
                     .attr("fill", this.settings.colors.actual)
                     .attr("font-size", `${fontSize}px`)
-                    .text(this.formatValue(stackBase));
+                    .text(this.formatValue(total));
             }
         });
     }

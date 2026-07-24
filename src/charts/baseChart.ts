@@ -2,8 +2,18 @@
  * Base Chart - Abstract class for all chart types
  */
 import * as d3 from "d3";
-import { DataPoint, ParsedData, ComparisonType, getVariance, getVariancePct, getComparisonValue } from "../dataParser";
-import { IBCSColors, DEFAULT_IBCS_COLORS, getVarianceColor } from "../utils/colors";
+import {
+    DataPoint,
+    ParsedData,
+    ComparisonType,
+    FiniteValue,
+    MeasureKey,
+    getAvailableComparisonType,
+    getVariance,
+    getVariancePct,
+    getComparisonValue
+} from "../dataParser";
+import { IBCSColors, getVarianceColor } from "../utils/colors";
 import { formatNumber, formatPercent, NumberScale } from "../utils/formatting";
 import { getCommentBoxPosition, getLegendPosition } from "../layoutEngine";
 
@@ -65,6 +75,13 @@ export interface ChartSettings {
     invertVariance: boolean;
     comparisonType: ComparisonType;
     colors: IBCSColors;
+    foreground: string;
+    background: string;
+    highContrast: boolean;
+    /** Raw finite domain shared by small-multiple cells. */
+    sharedValueDomain?: [number, number];
+    /** Stable magnitude used by Auto display units throughout this visual. */
+    displayUnitReference?: number;
     
     // Title
     title: TitleSettings;
@@ -92,6 +109,8 @@ export interface ChartSettings {
     showPercentage: boolean;
     fontSize: number;
     fontColor: string;
+    /** Host locale. visual.ts should pass IVisualHost.locale. */
+    locale?: string;
 }
 
 export interface Rect {
@@ -116,10 +135,13 @@ export interface ChartDimensions {
 }
 
 export abstract class BaseChart {
+    private static nextInstanceId = 0;
     protected container: d3.Selection<SVGGElement, unknown, null, undefined>;
     protected data: ParsedData;
     protected settings: ChartSettings;
     protected dimensions: ChartDimensions;
+    protected readonly instanceId: string;
+    protected readonly forecastPatternId: string;
 
     constructor(
         container: d3.Selection<SVGGElement, unknown, null, undefined>,
@@ -131,46 +153,70 @@ export abstract class BaseChart {
         this.data = data;
         this.settings = settings;
         this.dimensions = dimensions;
+        this.instanceId = `atlyn-chart-${BaseChart.nextInstanceId++}`;
+        this.forecastPatternId = `${this.instanceId}-forecast-hatch`;
     }
 
     abstract render(): void;
 
     protected get chartWidth(): number {
-        return this.dimensions.width - this.dimensions.margin.left - this.dimensions.margin.right;
+        return Math.max(0, this.dimensions.width - this.dimensions.margin.left - this.dimensions.margin.right);
     }
 
     protected get chartHeight(): number {
-        return this.dimensions.height - this.dimensions.margin.top - this.dimensions.margin.bottom;
+        return Math.max(0, this.dimensions.height - this.dimensions.margin.top - this.dimensions.margin.bottom);
     }
 
-    /** Returns the shared maxValue if set (small multiples shared scale), otherwise the local value */
-    protected getEffectiveMax(localMax: number): number {
-        return (this.data.maxValue && this.data.maxValue > 0) ? this.data.maxValue : localMax;
+    protected getComparisonType(): ComparisonType | null {
+        return getAvailableComparisonType(this.data, this.settings.comparisonType);
     }
 
-    protected getVarianceForPoint(d: DataPoint): number {
-        let variance = getVariance(d, this.settings.comparisonType);
+    protected getComparisonPresentation(): { key: ComparisonType; color: string; label: string } | null {
+        const key = this.getComparisonType();
+        if (key === null) return null;
+        switch (key) {
+            case "previousYear":
+                return { key, color: this.settings.colors.previousYear, label: "Previous Year" };
+            case "forecast":
+                return { key, color: this.settings.colors.forecast, label: "Forecast" };
+            default:
+                return { key, color: this.settings.colors.budget, label: "Plan" };
+        }
+    }
+
+    protected getVarianceForPoint(d: DataPoint): FiniteValue {
+        const comparisonType = this.getComparisonType();
+        if (comparisonType === null) return null;
+        let variance = getVariance(d, comparisonType);
+        if (variance === null) return null;
         if (this.settings.invertVariance) {
             variance = -variance;
         }
         return variance;
     }
 
-    protected getVariancePctForPoint(d: DataPoint): number {
-        let pct = getVariancePct(d, this.settings.comparisonType);
+    protected getVariancePctForPoint(d: DataPoint): FiniteValue {
+        const comparisonType = this.getComparisonType();
+        if (comparisonType === null) return null;
+        let pct = getVariancePct(d, comparisonType);
+        if (pct === null) return null;
         if (this.settings.invertVariance) {
             pct = -pct;
         }
         return pct;
     }
 
-    protected getComparisonForPoint(d: DataPoint): number {
-        return getComparisonValue(d, this.settings.comparisonType);
+    protected getComparisonForPoint(d: DataPoint): FiniteValue {
+        const comparisonType = this.getComparisonType();
+        return comparisonType === null ? null : getComparisonValue(d, comparisonType);
     }
 
     protected getVarianceColorForPoint(d: DataPoint): string {
+        if (this.settings.highContrast) return this.settings.foreground;
         const variance = this.getVarianceForPoint(d);
-        const pct = Math.abs(this.getVariancePctForPoint(d));
+        if (variance === null || variance === 0) return this.settings.colors.actual;
+        const rawPct = this.getVariancePctForPoint(d);
+        const pct = rawPct === null ? Number.POSITIVE_INFINITY : Math.abs(rawPct);
         
         // Apply highlighting threshold
         if (this.settings.highlighting.show) {
@@ -188,38 +234,128 @@ export abstract class BaseChart {
         return getVarianceColor(variance, this.settings.colors);
     }
 
-    protected formatValue(value: number): string {
+    protected formatValue(value: FiniteValue, measure: MeasureKey = "actual"): string {
         return formatNumber(value, { 
             scale: this.settings.dataLabels.displayUnits, 
             decimals: this.settings.dataLabels.decimalPlaces,
-            negativeFormat: this.settings.dataLabels.negativeFormat
+            negativeFormat: this.settings.dataLabels.negativeFormat,
+            format: this.data.formats[measure],
+            locale: this.settings.locale ?? this.data.locale,
+            representativeValue: this.settings.displayUnitReference
         });
+    }
+
+    protected formatVarianceValues(variance: FiniteValue, percentage: FiniteValue): string {
+        const labels: string[] = [];
+        if (this.settings.dataLabels.showVariance && variance !== null) {
+            labels.push(formatNumber(variance, {
+                scale: this.settings.dataLabels.displayUnits,
+                decimals: this.settings.dataLabels.decimalPlaces,
+                showSign: true,
+                negativeFormat: this.settings.dataLabels.negativeFormat,
+                format: this.data.formats.actual,
+                locale: this.settings.locale ?? this.data.locale,
+                representativeValue: this.settings.displayUnitReference
+            }));
+        }
+        if (this.settings.dataLabels.showPercentage && percentage !== null) {
+            const formatted = formatPercent(
+                percentage,
+                this.settings.dataLabels.decimalPlaces,
+                true,
+                this.settings.locale ?? this.data.locale
+            );
+            labels.push(labels.length > 0 ? `(${formatted})` : formatted);
+        }
+        return labels.join(" ");
     }
 
     protected formatVarianceLabel(d: DataPoint): string {
-        const variance = this.getVarianceForPoint(d);
-        const pct = this.getVariancePctForPoint(d);
-        
-        if (this.settings.dataLabels.showPercentage) {
-            return formatPercent(pct, this.settings.dataLabels.decimalPlaces, true);
+        return this.formatVarianceValues(
+            this.getVarianceForPoint(d),
+            this.getVariancePctForPoint(d)
+        );
+    }
+
+    protected finiteValues(values: FiniteValue[]): number[] {
+        return values.filter((value): value is number => value !== null && Number.isFinite(value));
+    }
+
+    protected getValueDomain(values: FiniteValue[], padding = 0.1): [number, number] {
+        let min = 0;
+        let max = 0;
+        for (const value of values) {
+            if (value !== null && Number.isFinite(value)) {
+                min = Math.min(min, value);
+                max = Math.max(max, value);
+            }
         }
-        return formatNumber(variance, { 
-            scale: this.settings.dataLabels.displayUnits, 
-            decimals: this.settings.dataLabels.decimalPlaces, 
-            showSign: true,
-            negativeFormat: this.settings.dataLabels.negativeFormat
-        });
+        if (min === 0 && max === 0) return [-1, 1];
+        if (min < 0) {
+            const padded = min * (1 + padding);
+            if (Number.isFinite(padded)) min = padded;
+        }
+        if (max > 0) {
+            const padded = max * (1 + padding);
+            if (Number.isFinite(padded)) max = padded;
+        }
+        if (min === max) {
+            return min === 0 ? [-1, 1] : min > 0 ? [0, min] : [min, 0];
+        }
+        return [min, max];
+    }
+
+    protected createValueScale(
+        values: FiniteValue[],
+        range: [number, number],
+        padding = 0.1
+    ): d3.ScaleLinear<number, number> {
+        const domainValues = this.settings.sharedValueDomain ?? values;
+        const [min, max] = this.getValueDomain(domainValues, padding);
+        if (min < 0 && max > 0 && !Number.isFinite(max - min)) {
+            const magnitude = Math.max(Math.abs(min), max);
+            const negativeRatio = Math.abs(min) / magnitude;
+            const positiveRatio = max / magnitude;
+            const zeroFraction = negativeRatio / (negativeRatio + positiveRatio);
+            const zeroRange = range[0] + (range[1] - range[0]) * zeroFraction;
+            return d3.scaleLinear()
+                .domain([min, 0, max])
+                .range([range[0], zeroRange, range[1]]);
+        }
+        return d3.scaleLinear().domain([min, max]).range(range);
+    }
+
+    protected pointKey(point: DataPoint, position: number): string {
+        return point.index === null
+            ? `aggregate-${position}-${point.sourceIndices.join("-")}`
+            : `row-${point.index}`;
+    }
+
+    protected categoryKeys(): string[] {
+        return this.data.dataPoints.map((point, index) => this.pointKey(point, index));
+    }
+
+    protected categoryLabels(): Map<string, string> {
+        return new Map(this.data.dataPoints.map((point, index) => [this.pointKey(point, index), point.category]));
     }
 
     /** Returns true if the label at index i should be shown based on labelDensity */
-    protected shouldShowLabel(i: number, total: number, values: number[]): boolean {
+    protected shouldShowLabel(i: number, total: number, values: FiniteValue[]): boolean {
         const density = this.settings.dataLabels.labelDensity;
         if (density === "none") return false;
         if (density === "all") return true;
         if (density === "firstLast") return i === 0 || i === total - 1;
         if (density === "minMax") {
-            const min = Math.min(...values);
-            const max = Math.max(...values);
+            if (values[i] === null) return false;
+            let min = Number.POSITIVE_INFINITY;
+            let max = Number.NEGATIVE_INFINITY;
+            for (const value of values) {
+                if (value !== null && Number.isFinite(value)) {
+                    min = Math.min(min, value);
+                    max = Math.max(max, value);
+                }
+            }
+            if (!Number.isFinite(min) || !Number.isFinite(max)) return false;
             return values[i] === min || values[i] === max;
         }
         return true;
@@ -252,21 +388,29 @@ export abstract class BaseChart {
 
     protected renderXAxis(
         xScale: d3.ScaleBand<string>,
-        yPosition: number
+        yPosition: number,
+        labels: Map<string, string> = new Map()
     ): void {
         if (!this.settings.categories.show) return;
 
-        const xAxis = d3.axisBottom(xScale);
+        const xAxis = d3.axisBottom(xScale)
+            .tickFormat(key => labels.get(String(key)) ?? String(key));
         
         const axisGroup = this.container.append("g")
             .attr("class", "x-axis")
             .attr("transform", `translate(0,${yPosition})`)
             .call(xAxis);
+        axisGroup.selectAll(".domain, line").attr("stroke", this.settings.foreground);
         
         const maxW = this.settings.categories.maxWidth;
         axisGroup.selectAll("text")
             .attr("transform", `rotate(${this.settings.categories.rotation})`)
-            .style("text-anchor", this.settings.categories.rotation < 0 ? "end" : "start")
+            .style(
+                "text-anchor",
+                this.settings.categories.rotation === 0
+                    ? "middle"
+                    : this.settings.categories.rotation < 0 ? "end" : "start"
+            )
             .style("font-size", `${this.settings.categories.fontSize}px`)
             .style("fill", this.settings.categories.fontColor)
             .each(function() {
@@ -294,15 +438,17 @@ export abstract class BaseChart {
             .ticks(6)
             .tickFormat(d => this.formatValue(d as number));
         
-        this.container.append("g")
+        const axisGroup = this.container.append("g")
             .attr("class", "y-axis")
-            .call(yAxis)
-            .selectAll("text")
+            .call(yAxis);
+        axisGroup.selectAll(".domain, line").attr("stroke", this.settings.foreground);
+        axisGroup.selectAll("text")
             .style("font-size", `${this.settings.categories.fontSize}px`)
             .style("fill", this.settings.categories.fontColor);
 
-        // Render axis break if enabled
-        if (this.settings.axisBreak?.show && this.settings.axisBreak.breakValue > 0) {
+        // Axis-break settings are represented as a marker only. The scale stays
+        // continuous so marks, ticks, and hit targets cannot disagree.
+        if (this.settings.axisBreak?.show && Number.isFinite(this.settings.axisBreak.breakValue)) {
             this.renderAxisBreak(yScale, this.settings.axisBreak.breakValue);
         }
     }
@@ -356,7 +502,7 @@ export abstract class BaseChart {
                 .attr("x", x + 18)
                 .attr("y", y + 10)
                 .attr("font-size", `${this.settings.legend.fontSize}px`)
-                .attr("fill", "#333")
+                .attr("fill", this.settings.foreground)
                 .text(item.label);
         });
     }
@@ -374,8 +520,9 @@ export abstract class BaseChart {
         if (!pos) return;
 
         const { x, y, boxWidth, boxHeight } = pos;
+        if (boxWidth <= 0 || boxHeight <= 0) return;
         const markerSize = commentBox.markerSize || 18;
-        const markerColor = commentBox.markerColor || "#1a73e8";
+        const markerColor = commentBox.markerColor || this.settings.foreground;
         const fontSize = commentBox.fontSize;
         const padding = commentBox.padding;
 
@@ -385,21 +532,23 @@ export abstract class BaseChart {
             .attr("x", x)
             .attr("y", y)
             .attr("width", boxWidth)
-            .attr("height", Math.max(boxHeight, 60));
+            .attr("height", boxHeight);
 
         const scrollDiv = fo.append("xhtml:div")
             .style("width", `${boxWidth}px`)
-            .style("height", `${Math.max(boxHeight, 60)}px`)
+            .style("height", `${boxHeight}px`)
             .style("overflow-y", "auto")
             .style("overflow-x", "hidden")
             .style("font-family", "\"Segoe UI\", sans-serif")
+            .style("color", this.settings.foreground)
+            .style("background", this.settings.background)
             .style("box-sizing", "border-box");
 
         comments.forEach(({ dp, index }, commentNum) => {
             const num = commentNum + 1;
             const variance = this.getVarianceForPoint(dp);
             const pct = this.getVariancePctForPoint(dp);
-            const isPositive = variance >= 0;
+            const isPositive = variance !== null && variance > 0;
 
             const card = scrollDiv.append("xhtml:div")
                 .style("display", "flex")
@@ -412,6 +561,7 @@ export abstract class BaseChart {
             card.append("xhtml:div")
                 .attr("class", "comment-card-marker")
                 .attr("data-comment-index", String(index))
+                .attr("data-comment-source", dp.sourceIndices.join(","))
                 .style("min-width", `${markerSize}px`)
                 .style("width", `${markerSize}px`)
                 .style("height", `${markerSize}px`)
@@ -443,22 +593,28 @@ export abstract class BaseChart {
             // Line 2: Value + variance + icon
             const valueStr = this.formatValue(dp.actual);
             let variancePart = "";
-            if (commentBox.showVariance === "absolute" || commentBox.showVariance === "both") {
+            if (
+                variance !== null
+                && (commentBox.showVariance === "absolute" || commentBox.showVariance === "both")
+            ) {
                 variancePart += ` ${this.formatValue(variance)}`;
             }
-            if (commentBox.showVariance === "relative" || commentBox.showVariance === "both") {
-                variancePart += ` ${formatPercent(pct, 1, true)}`;
+            if (
+                pct !== null
+                && (commentBox.showVariance === "relative" || commentBox.showVariance === "both")
+            ) {
+                variancePart += ` ${formatPercent(pct, 1, true, this.settings.locale ?? this.data.locale)}`;
             }
 
             const valueLine = content.append("xhtml:div")
                 .style("font-size", `${fontSize}px`)
-                .style("color", "#333")
+                .style("color", this.settings.foreground)
                 .style("line-height", "1.4");
 
             valueLine.append("xhtml:span").text(`${valueStr}${variancePart}`);
 
             // Variance icon inline
-            if (commentBox.varianceIcon !== "none" && commentBox.showVariance !== "none") {
+            if (commentBox.varianceIcon !== "none" && commentBox.showVariance !== "none" && variance !== null && variance !== 0) {
                 let icon = "";
                 if (commentBox.varianceIcon === "triangle") icon = isPositive ? " \u25B2" : " \u25BC";
                 else if (commentBox.varianceIcon === "arrow") icon = isPositive ? " \u2191" : " \u2193";
@@ -478,13 +634,18 @@ export abstract class BaseChart {
             if (dp.comment) {
                 let commentText = dp.comment.trim();
                 const categoryLower = dp.category.trim().toLowerCase();
-                if (commentText.toLowerCase().startsWith(categoryLower)) {
+                const commentLower = commentText.toLowerCase();
+                if (
+                    commentLower === categoryLower
+                    || commentLower.startsWith(`${categoryLower}:`)
+                    || commentLower.startsWith(`${categoryLower} -`)
+                ) {
                     commentText = commentText.substring(categoryLower.length).trim().replace(/^[-:]\s*/, "");
                 }
                 if (commentText.length > 0) {
                     content.append("xhtml:div")
-                        .style("font-size", `${fontSize - 1}px`)
-                        .style("color", "#666")
+                        .style("font-size", `${Math.max(0, fontSize - 1)}px`)
+                        .style("color", this.settings.foreground)
                         .style("line-height", "1.4")
                         .style("word-wrap", "break-word")
                         .text(commentText);
@@ -510,13 +671,14 @@ export abstract class BaseChart {
         if (comments.length === 0) return;
 
         const markerSize = commentBox.markerSize || 18;
-        const markerColor = commentBox.markerColor || "#1a73e8";
+        const markerColor = commentBox.markerColor || this.settings.foreground;
         const fontSize = commentBox.fontSize;
         const bandWidth = xScale.bandwidth();
 
         comments.forEach(({ dp, index }, commentNum) => {
             const num = commentNum + 1;
-            const cx = (xScale(dp.category) || 0) + bandWidth / 2;
+            if (dp.actual === null) return;
+            const cx = (xScale(this.pointKey(dp, index)) ?? 0) + bandWidth / 2;
             // Place marker just below the bar (or at the baseline if bar goes up)
             const barY = yScale(dp.actual);
             const baseY = yScale(0);
@@ -530,7 +692,8 @@ export abstract class BaseChart {
                 .attr("stroke", markerColor)
                 .attr("stroke-width", 1.5)
                 .attr("class", "comment-marker")
-                .attr("data-comment-index", index);
+                .attr("data-comment-index", index)
+                .attr("data-comment-source", dp.sourceIndices.join(","));
 
             this.container.append("text")
                 .attr("x", cx)
@@ -541,49 +704,54 @@ export abstract class BaseChart {
                 .attr("font-weight", "bold")
                 .attr("class", "comment-marker-text")
                 .attr("data-comment-index", index)
+                .attr("data-comment-source", dp.sourceIndices.join(","))
                 .text(String(num));
         });
     }
 
     protected renderAxisBreak(yScale: d3.ScaleLinear<number, number>, breakValue: number): void {
-        if (breakValue <= 0) return;
+        if (!Number.isFinite(breakValue)) return;
         
         const y = yScale(breakValue);
-        const w = this.chartWidth;
-        
-        // White band to visually "break" the axis
-        this.container.append("rect")
-            .attr("x", -10)
-            .attr("y", y - 4)
-            .attr("width", w + 20)
-            .attr("height", 8)
-            .attr("fill", "white")
-            .attr("stroke", "none");
-        
-        // Zigzag line spanning chart width
-        const step = 8;
-        let zigzagPath = `M-10,${y}`;
-        for (let x = -10; x <= w + 10; x += step) {
-            const offset = (Math.floor((x + 10) / step) % 2 === 0) ? -4 : 4;
-            zigzagPath += ` L${x},${y + offset}`;
-        }
-        
+        if (!Number.isFinite(y) || y < 0 || y > this.chartHeight) return;
         this.container.append("path")
-            .attr("d", zigzagPath)
-            .attr("stroke", "#999")
+            .attr("class", "axis-break-indicator")
+            .attr("d", `M-7,${y - 3} L-2,${y + 3} L3,${y - 3} L8,${y + 3}`)
+            .attr("stroke", this.settings.foreground)
             .attr("stroke-width", 1.5)
-            .attr("fill", "none");
+            .attr("fill", "none")
+            .append("title")
+            .text("Axis break marker; scale remains continuous");
+    }
+
+    protected renderHorizontalAxisBreak(
+        xScale: d3.ScaleLinear<number, number>,
+        breakValue: number
+    ): void {
+        if (!Number.isFinite(breakValue)) return;
+        const x = xScale(breakValue);
+        if (!Number.isFinite(x) || x < 0 || x > this.chartWidth) return;
+        this.container.append("path")
+            .attr("class", "axis-break-indicator")
+            .attr(
+                "d",
+                `M${x - 3},${this.chartHeight - 7} L${x + 3},${this.chartHeight - 2} `
+                + `L${x - 3},${this.chartHeight + 3} L${x + 3},${this.chartHeight + 8}`
+            )
+            .attr("stroke", this.settings.foreground)
+            .attr("stroke-width", 1.5)
+            .attr("fill", "none")
+            .append("title")
+            .text("Axis break marker; scale remains continuous");
     }
 
     protected createPatternDefs(): void {
         // Remove existing defs
-        this.container.select("defs.ibcs-patterns").remove();
-        
         const defs = this.container.append("defs").attr("class", "ibcs-patterns");
         
         // Forecast hatch pattern
         const pattern = defs.append("pattern")
-            .attr("id", "forecast-hatch")
+            .attr("id", this.forecastPatternId)
             .attr("width", 6)
             .attr("height", 6)
             .attr("patternUnits", "userSpaceOnUse")
@@ -597,7 +765,7 @@ export abstract class BaseChart {
         pattern.append("line")
             .attr("x1", 0).attr("y1", 0)
             .attr("x2", 0).attr("y2", 6)
-            .attr("stroke", "white")
+            .attr("stroke", this.settings.background)
             .attr("stroke-width", 2);
     }
 }

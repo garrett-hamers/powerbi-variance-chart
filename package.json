@@ -1,37 +1,44 @@
 {
-  "name": "visual",
-  "description": "default_template_value",
-  "version": "1.0.0.0",
+  "name": "atlyn-variance-chart",
+  "description": "Open-source variance analysis visual for Microsoft Power BI.",
+  "version": "1.8.1.0",
+  "private": true,
   "repository": {
-    "type": "default_template_value",
-    "url": "default_template_value"
+    "type": "git",
+    "url": "https://github.com/garrett-hamers/powerbi-variance-chart.git"
   },
   "license": "MIT",
   "scripts": {
     "pbiviz": "pbiviz",
     "start": "pbiviz start",
-    "package": "pbiviz package && powershell -Command \"Get-ChildItem dist/*.pbiviz | Rename-Item -NewName atlynVarianceChart.pbiviz -Force\"",
-    "lint": "npx eslint .",
+    "package": "pbiviz package --certification-audit",
+    "eslint": "npx eslint . --ext .js,.jsx,.ts,.tsx",
+    "lint": "npm run eslint",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "d3": "^7.9.0",
-    "powerbi-models": "^2.0.1",
-    "powerbi-visuals-api": "~5.3.0",
-    "powerbi-visuals-utils-formattingmodel": "6.0.4"
+    "powerbi-models": "2.1.1",
+    "powerbi-visuals-api": "5.11.1",
+    "powerbi-visuals-utils-formattingmodel": "6.0.4",
+    "powerbi-visuals-utils-formattingutils": "6.1.2"
   },
   "devDependencies": {
     "@types/d3": "^7.4.3",
-    "@typescript-eslint/eslint-plugin": "^8.8.0",
-    "eslint": "^9.11.1",
-    "eslint-plugin-powerbi-visuals": "^1.0.0",
-    "happy-dom": "^20.5.0",
+    "eslint": "9.39.5",
+    "eslint-plugin-powerbi-visuals": "1.1.1",
+    "happy-dom": "20.11.0",
     "less": "^4.5.1",
-    "powerbi-visuals-utils-testutils": "^6.1.1",
-    "sharp": "^0.34.5",
+    "powerbi-visuals-tools": "7.2.0",
     "typescript": "5.5.4",
-    "vitest": "^4.0.18"
+    "vitest": "4.1.10"
+  },
+  "overrides": {
+    "@hono/node-server": "2.0.11",
+    "sockjs": {
+      "uuid": "11.1.1"
+    }
   }
 }

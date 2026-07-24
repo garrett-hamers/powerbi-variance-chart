@@ -1,17 +1,20 @@
 .varianceChart {
     font-family: "Segoe UI", wf_segoe-ui_normal, helvetica, arial, sans-serif;
+    display: block;
+    background: var(--atlyn-background);
+    color: var(--atlyn-foreground);
 
     .chartContainer {
         .x-axis, .y-axis {
             path, line {
-                stroke: #ccc;
+                stroke: var(--atlyn-foreground);
             }
             text {
-                fill: #666;
+                fill: var(--atlyn-foreground);
             }
         }
 
-        rect {
+        [data-source-indices] {
             transition: opacity 0.2s ease, transform 0.1s ease;
             cursor: pointer;
             
@@ -21,27 +24,27 @@
             }
             
             &:focus {
-                outline: 2px solid #0078d4;
+                outline: 2px solid var(--atlyn-selection);
                 outline-offset: 2px;
             }
         }
 
-        circle {
-            transition: opacity 0.2s ease, r 0.1s ease;
-            cursor: pointer;
-            
-            &:hover {
-                opacity: 0.85;
-            }
-            
-            &:focus {
-                outline: 2px solid #0078d4;
-                outline-offset: 2px;
-            }
+        [data-source-indices].host-selected {
+            outline: 2px solid var(--atlyn-selection);
+            outline-offset: 1px;
         }
 
         line {
             pointer-events: none;
+        }
+
+        .visual-control {
+            cursor: pointer;
+
+            &:focus {
+                outline: 2px solid var(--atlyn-selection);
+                outline-offset: 2px;
+            }
         }
     }
 
@@ -49,13 +52,26 @@
         text {
             cursor: default;
         }
-        
+
         rect {
             cursor: default;
-            
             &:hover {
                 transform: none;
             }
+        }
+
+        .comment-marker.comment-highlighted {
+            stroke: var(--atlyn-selection);
+            stroke-width: 3px;
+        }
+
+        .comment-marker-text.comment-highlighted {
+            fill: var(--atlyn-selection);
+        }
+
+        .comment-card-marker.comment-highlighted {
+            outline: 2px solid var(--atlyn-selection);
+            outline-offset: 1px;
         }
     }
 
@@ -63,7 +79,7 @@
     .comment-box {
         div {
             scrollbar-width: thin;
-            scrollbar-color: #c0c0c0 transparent;
+            scrollbar-color: var(--atlyn-foreground) transparent;
 
             &::-webkit-scrollbar {
                 width: 6px;
@@ -72,10 +88,10 @@
                 background: transparent;
             }
             &::-webkit-scrollbar-thumb {
-                background-color: #c0c0c0;
+                background-color: var(--atlyn-foreground);
                 border-radius: 3px;
                 &:hover {
-                    background-color: #a0a0a0;
+                    background-color: var(--atlyn-selection);
                 }
             }
         }
@@ -93,22 +109,64 @@
     }
 }
 
-// High contrast mode overrides
-@media screen and (-ms-high-contrast: active) {
+.atlyn-visual-host {
+    position: relative;
+    overflow: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--atlyn-foreground) transparent;
+}
+
+.atlyn-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.varianceChart.high-contrast {
+    [data-source-indices] {
+        stroke: var(--atlyn-foreground);
+        stroke-width: 2px;
+    }
+
+    [data-source-indices]:nth-of-type(even) {
+        stroke-dasharray: 4 2;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .varianceChart [data-source-indices] {
+        transition: none;
+    }
+}
+
+@media screen and (-ms-high-contrast: active), (forced-colors: active) {
     .varianceChart {
-        rect, circle {
-            stroke: currentColor;
+        forced-color-adjust: auto;
+
+        [data-source-indices] {
+            stroke: CanvasText;
             stroke-width: 1px;
         }
         
         text {
-            fill: currentColor;
+            fill: CanvasText;
         }
         
         .x-axis, .y-axis {
             path, line {
-                stroke: currentColor;
+                stroke: CanvasText;
             }
+        }
+
+        .visual-control:focus,
+        [data-source-indices]:focus {
+            outline-color: Highlight;
         }
     }
 }

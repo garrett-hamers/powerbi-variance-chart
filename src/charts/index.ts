@@ -35,7 +35,19 @@ import { ComboChart } from "./comboChart";
 import { BarChart } from "./barChart";
 import { DotChart } from "./dotChart";
 import { LollipopChart } from "./lollipopChart";
-import { ParsedData } from "../dataParser";
+import {
+    ComparisonType,
+    finiteStackExtents,
+    finiteSum,
+    FiniteValue,
+    getAvailableComparisonType,
+    getComparisonValue,
+    getDataPointGroupKey,
+    getGroupKeys,
+    getVariance,
+    ParsedData,
+    safeAdd
+} from "../dataParser";
 
 export type ChartType = 
     | "variance" 
@@ -48,6 +60,120 @@ export type ChartType =
     | "combo" 
     | "dot"
     | "lollipop";
+
+function finiteDomain(values: FiniteValue[]): [number, number] {
+    let min = 0;
+    let max = 0;
+    for (const value of values) {
+        if (value !== null && Number.isFinite(value)) {
+            min = Math.min(min, value);
+            max = Math.max(max, value);
+        }
+    }
+    return min === 0 && max === 0 ? [-1, 1] : [min, max];
+}
+
+/**
+ * Returns exactly the values a chart can render. The result is unpadded,
+ * finite, and includes zero so every small-multiple cell can share it safely.
+ */
+export function getChartValueDomain(
+    chartType: ChartType,
+    data: ParsedData,
+    preferredComparison: ComparisonType,
+    invertVariance: boolean
+): [number, number] {
+    const comparison = getAvailableComparisonType(data, preferredComparison);
+    const values: FiniteValue[] = [];
+
+    if (chartType === "lollipop") {
+        for (const point of data.dataPoints) {
+            const variance = comparison === null ? null : getVariance(point, comparison);
+            values.push(variance === null ? null : invertVariance ? -variance : variance);
+        }
+        return finiteDomain(values);
+    }
+
+    if (chartType === "waterfall") {
+        const groups = data.hasGroups ? getGroupKeys(data) : [""];
+        for (const group of groups) {
+            const points = data.hasGroups
+                ? data.dataPoints.filter(point => getDataPointGroupKey(point) === group)
+                : data.dataPoints;
+            if (comparison === null) {
+                values.push(...points.map(point => point.actual));
+                continue;
+            }
+            const pairs = points.filter(point =>
+                !point.comment.startsWith("=")
+                && point.actual !== null
+                && getComparisonValue(point, comparison) !== null
+            );
+            if (pairs.length === 0) {
+                values.push(...points.map(point => point.actual));
+                continue;
+            }
+            const opening = finiteSum(pairs.map(point => getComparisonValue(point, comparison)));
+            const closing = finiteSum(pairs.map(point => point.actual));
+            if (opening === null || closing === null) {
+                values.push(...points.map(point => point.actual));
+                continue;
+            }
+            let running = opening;
+            const groupValues: FiniteValue[] = [running];
+            let validBridge = true;
+            for (const point of points) {
+                if (point.comment.startsWith("=")) {
+                    groupValues.push(running);
+                    continue;
+                }
+                if (point.actual === null || getComparisonValue(point, comparison) === null) continue;
+                const variance = getVariance(point, comparison);
+                const next = safeAdd(running, variance);
+                if (variance === null || next === null) {
+                    validBridge = false;
+                    break;
+                }
+                running = next;
+                groupValues.push(running);
+            }
+            if (validBridge) {
+                groupValues.push(closing);
+                values.push(...groupValues);
+            } else {
+                values.push(...points.map(point => point.actual));
+            }
+        }
+        return finiteDomain(values);
+    }
+
+    if (chartType === "columnStacked") {
+        for (const point of data.dataPoints) {
+            values.push(...finiteStackExtents([
+                point.actual,
+                comparison === null ? null : getComparisonValue(point, comparison)
+            ]));
+        }
+        return finiteDomain(values);
+    }
+
+    const allComparators = chartType === "line" || chartType === "area" || chartType === "combo";
+    for (const point of data.dataPoints) {
+        values.push(point.actual);
+        if (allComparators) {
+            if (data.hasBudget) values.push(point.budget);
+            if (data.hasPreviousYear) values.push(point.previousYear);
+            if (data.hasForecast) values.push(point.forecast);
+        } else if (comparison !== null) {
+            values.push(getComparisonValue(point, comparison));
+        }
+        if (chartType === "variance" && comparison !== null) {
+            const variance = getVariance(point, comparison);
+            values.push(variance === null ? null : invertVariance ? -variance : variance);
+        }
+    }
+    return finiteDomain(values);
+}
 
 export function createChart(
     chartType: ChartType,

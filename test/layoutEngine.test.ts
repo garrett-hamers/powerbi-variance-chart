@@ -140,12 +140,12 @@ describe("calculateLayout", () => {
 });
 
 describe("getCommentBoxPosition", () => {
-    it("x == chartWidth + 10", () => {
+    it("uses the exact allocated comment area with ten-pixel inline padding", () => {
         const dims = calculateLayout(VP_W, VP_H, defaultConfig());
         const pos = getCommentBoxPosition(dims);
-        const { chartWidth } = getChartArea(dims);
         expect(pos).not.toBeNull();
-        expect(pos!.x).toBe(chartWidth + 10);
+        expect(dims.margin.left + pos!.x).toBe(dims.layout!.commentBoxArea!.x + 10);
+        expect(dims.margin.top + pos!.y).toBe(dims.layout!.commentBoxArea!.y);
     });
 
     it("absolute right edge fits within viewport", () => {
@@ -168,7 +168,7 @@ describe("getCommentBoxPosition", () => {
     it("boxWidth uses comment allocation width", () => {
         const dims = calculateLayout(VP_W, VP_H, defaultConfig());
         const pos = getCommentBoxPosition(dims);
-        expect(pos!.boxWidth).toBe(220 - 30); // allocation minus padding
+        expect(pos!.boxWidth).toBe(220 - 20);
     });
 });
 
@@ -180,11 +180,12 @@ describe("getLegendPosition", () => {
         expect(pos.x).toBeGreaterThan(chartWidth);
     });
 
-    it("right legend with comment on right: x accounts for comment offset", () => {
+    it("uses the allocated right-legend position independent of legacy hints", () => {
         const dims = calculateLayout(VP_W, VP_H, defaultConfig());
         const posWithComment = getLegendPosition(dims, "right", true, 3);
         const posWithout = getLegendPosition(dims, "right", false, 3);
-        expect(posWithComment.x - posWithout.x).toBe(220);
+        expect(posWithComment).toEqual(posWithout);
+        expect(dims.margin.left + posWithComment.x).toBe(dims.layout!.legendArea!.x);
     });
 
     it("right legend: absolute position is within viewport", () => {
@@ -260,6 +261,37 @@ describe("edge cases", () => {
         expect(chartWidth).toBeGreaterThan(0);
         expect(dims.margin.right).toBeGreaterThan(0);
     });
+
+    it.each([0, 1, 2, 10, 25, 49])("keeps every layout rectangle finite and nonnegative at %spx", size => {
+        const dims = calculateLayout(size, size, defaultConfig());
+        const rectangles = [
+            dims.layout!.chartArea,
+            dims.layout!.titleArea,
+            dims.layout!.legendArea,
+            dims.layout!.commentBoxArea
+        ].filter((rect): rect is NonNullable<typeof rect> => rect !== undefined);
+        for (const rect of rectangles) {
+            for (const value of [rect.x, rect.y, rect.width, rect.height]) {
+                expect(Number.isFinite(value)).toBe(true);
+                expect(value).toBeGreaterThanOrEqual(0);
+            }
+            expect(rect.x + rect.width).toBeLessThanOrEqual(size);
+            expect(rect.y + rect.height).toBeLessThanOrEqual(size);
+        }
+        const chart = getChartArea(dims);
+        expect(chart.chartWidth).toBeGreaterThanOrEqual(0);
+        expect(chart.chartHeight).toBeGreaterThanOrEqual(0);
+    });
+
+    it("does not synthesize a comment-box position when no rectangle was allocated", () => {
+        const dims = calculateLayout(20, 20, defaultConfig({
+            title: { show: true },
+            legend: { show: true, position: "right" },
+            commentBox: { show: true }
+        }));
+        expect(dims.layout!.commentBoxArea).toBeUndefined();
+        expect(getCommentBoxPosition(dims)).toBeNull();
+    });
 });
 
 // ── Small Multiples Tests ──
@@ -277,6 +309,30 @@ function defaultSmConfig(overrides: Partial<SmallMultiplesConfig> = {}): SmallMu
 }
 
 describe("calculateSmallMultiplesGrid", () => {
+    it("returns an empty finite grid for zero groups", () => {
+        expect(calculateSmallMultiplesGrid(20, 20, 0, defaultSmConfig())).toEqual({
+            cols: 0,
+            rows: 0,
+            cellWidth: 0,
+            cellHeight: 0
+        });
+    });
+
+    it("clamps tiny grid cells and cell layouts to finite nonnegative values", () => {
+        const config = defaultSmConfig({ columns: 5, spacing: 20 });
+        const grid = calculateSmallMultiplesGrid(1, 1, 5, config);
+        expect(grid.cellWidth).toBe(0);
+        expect(grid.cellHeight).toBe(0);
+        const cell = calculateCellLayout(grid, 0, config);
+        for (const value of [
+            cell.x, cell.y, cell.headerHeight, cell.chartWidth, cell.chartHeight,
+            cell.margin.top, cell.margin.right, cell.margin.bottom, cell.margin.left
+        ]) {
+            expect(Number.isFinite(value)).toBe(true);
+            expect(value).toBeGreaterThanOrEqual(0);
+        }
+    });
+
     it("auto columns: 800px wide gives 3 cols for 4 groups", () => {
         const grid = calculateSmallMultiplesGrid(800, 400, 4, defaultSmConfig());
         expect(grid.cols).toBe(3);

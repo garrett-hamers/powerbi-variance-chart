@@ -1,6 +1,5 @@
 /**
- * Layout Engine - Pure function for calculating chart layout
- * Extracted from visual.ts for testability
+ * Layout Engine - finite, nonnegative chart layout calculations
  */
 
 export interface Rect {
@@ -41,146 +40,170 @@ export interface LayoutConfig {
     breakpoint: string;
 }
 
-/**
- * Pure function that calculates the layout for the visual.
- * All peripheral elements (title, legend, comment box) carve space from the viewport.
- * The remaining space becomes the chart area.
- * Final margins encode the chart container's position within the viewport.
- */
-export function calculateLayout(width: number, height: number, config: LayoutConfig): LayoutDimensions {
-    const layout: ChartLayout = {
-        chartArea: { x: 0, y: 0, width, height }
-    };
+function finiteNonnegative(value: number): number {
+    return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
 
-    // Compact margins for small breakpoints (no peripherals)
+function takeTop(available: Rect, requested: number): Rect | null {
+    const height = Math.min(finiteNonnegative(requested), available.height);
+    if (height <= 0 || available.width <= 0) return null;
+    const area = { x: available.x, y: available.y, width: available.width, height };
+    available.y += height;
+    available.height -= height;
+    return area;
+}
+
+function takeBottom(available: Rect, requested: number): Rect | null {
+    const height = Math.min(finiteNonnegative(requested), available.height);
+    if (height <= 0 || available.width <= 0) return null;
+    const area = {
+        x: available.x,
+        y: available.y + available.height - height,
+        width: available.width,
+        height
+    };
+    available.height -= height;
+    return area;
+}
+
+function takeLeft(available: Rect, requested: number): Rect | null {
+    const width = Math.min(finiteNonnegative(requested), available.width);
+    if (width <= 0 || available.height <= 0) return null;
+    const area = { x: available.x, y: available.y, width, height: available.height };
+    available.x += width;
+    available.width -= width;
+    return area;
+}
+
+function takeRight(available: Rect, requested: number): Rect | null {
+    const width = Math.min(finiteNonnegative(requested), available.width);
+    if (width <= 0 || available.height <= 0) return null;
+    const area = {
+        x: available.x + available.width - width,
+        y: available.y,
+        width,
+        height: available.height
+    };
+    available.width -= width;
+    return area;
+}
+
+function carvePeripherals(width: number, height: number, config: LayoutConfig): ChartLayout {
+    const available: Rect = { x: 0, y: 0, width, height };
+    const layout: ChartLayout = { chartArea: { ...available } };
+    if (config.title.show) {
+        const title = takeTop(available, 30);
+        if (title) layout.titleArea = title;
+    }
+    if (config.legend.show) {
+        const horizontal = config.legend.position === "top" || config.legend.position === "bottom";
+        const size = horizontal ? 30 : 80;
+        const legend = config.legend.position === "top"
+            ? takeTop(available, size)
+            : config.legend.position === "bottom"
+                ? takeBottom(available, size)
+                : config.legend.position === "left"
+                    ? takeLeft(available, size)
+                    : takeRight(available, size);
+        if (legend) layout.legendArea = legend;
+    }
+    if (config.commentBox.show && config.hasComments) {
+        const comments = takeRight(available, 220);
+        if (comments) layout.commentBoxArea = comments;
+    }
+    layout.chartArea = { ...available };
+    return layout;
+}
+
+function fitMargins(width: number, height: number, margins: Margins): Margins {
+    const result = {
+        top: finiteNonnegative(margins.top),
+        right: finiteNonnegative(margins.right),
+        bottom: finiteNonnegative(margins.bottom),
+        left: finiteNonnegative(margins.left)
+    };
+    const horizontal = result.left + result.right;
+    const horizontalLimit = width > 0 ? Math.max(0, width - 1) : 0;
+    if (horizontal > horizontalLimit && horizontal > 0) {
+        const scale = horizontalLimit / horizontal;
+        result.left *= scale;
+        result.right *= scale;
+    }
+    const vertical = result.top + result.bottom;
+    const verticalLimit = height > 0 ? Math.max(0, height - 1) : 0;
+    if (vertical > verticalLimit && vertical > 0) {
+        const scale = verticalLimit / vertical;
+        result.top *= scale;
+        result.bottom *= scale;
+    }
+    return result;
+}
+
+export function calculateLayout(rawWidth: number, rawHeight: number, config: LayoutConfig): LayoutDimensions {
+    const width = finiteNonnegative(rawWidth);
+    const height = finiteNonnegative(rawHeight);
     if (config.breakpoint === "small") {
         return {
-            width, height,
-            margin: { top: 5, right: 15, bottom: 25, left: 35 },
-            layout
+            width,
+            height,
+            margin: fitMargins(width, height, { top: 5, right: 15, bottom: 25, left: 35 }),
+            layout: { chartArea: { x: 0, y: 0, width, height } }
         };
     }
 
-    // Available rect starts as full viewport
-    const available: Rect = { x: 0, y: 0, width, height };
-
-    // 1. Title (Top)
-    if (config.title.show) {
-        const h = 30;
-        layout.titleArea = { x: available.x, y: available.y, width: available.width, height: h };
-        available.y += h;
-        available.height -= h;
-    }
-
-    // 2. Legend
-    if (config.legend.show) {
-        const position = config.legend.position;
-        const size = (position === "top" || position === "bottom") ? 30 : 80;
-
-        if (position === "top") {
-            layout.legendArea = { x: available.x, y: available.y, width: available.width, height: size };
-            available.y += size;
-            available.height -= size;
-        } else if (position === "bottom") {
-            layout.legendArea = { x: available.x, y: available.y + available.height - size, width: available.width, height: size };
-            available.height -= size;
-        } else if (position === "left") {
-            layout.legendArea = { x: available.x, y: available.y, width: size, height: available.height };
-            available.x += size;
-            available.width -= size;
-        } else { // right
-            layout.legendArea = { x: available.x + available.width - size, y: available.y, width: size, height: available.height };
-            available.width -= size;
-        }
-    }
-
-    // 3. Comment Box — always right (ZebraBI-style)
-    if (config.commentBox.show && config.hasComments) {
-        const w = 220;
-        layout.commentBoxArea = { x: available.x + available.width - w, y: available.y, width: w, height: available.height };
-        available.width -= w;
-    }
-
-    // Remaining available rect is the chart area
-    layout.chartArea = { ...available };
-
-    // 4. Calculate axis margins
+    const layout = carvePeripherals(width, height, config);
+    const available = layout.chartArea;
     let axisBottom = 60;
     if (config.categories.show) {
-        const rot = Math.abs(config.categories.rotation);
-        if (rot === 0) {
-            axisBottom = 30 + config.categories.fontSize * 2;
+        const rotation = Math.abs(Number.isFinite(config.categories.rotation) ? config.categories.rotation : 0);
+        if (rotation === 0) {
+            axisBottom = 30 + finiteNonnegative(config.categories.fontSize) * 2;
         } else {
-            const rotatedHeight = Math.min(config.categories.maxWidth, 150) * Math.sin(rot * Math.PI / 180);
-            axisBottom = 30 + rotatedHeight + 10;
+            const maxWidth = Math.min(finiteNonnegative(config.categories.maxWidth), 150);
+            axisBottom = 40 + maxWidth * Math.sin(rotation * Math.PI / 180);
         }
     }
     if (config.chartType === "waterfall") axisBottom += 20;
 
-    const axisMargins: Margins = { top: 30, right: 30, bottom: axisBottom, left: 60 };
+    const axes: Margins = { top: 30, right: 30, bottom: axisBottom, left: 60 };
     if (config.breakpoint === "medium") {
-        axisMargins.top = 20;
-        axisMargins.right = 30;
-        axisMargins.bottom = Math.min(axisBottom, 60);
-        axisMargins.left = 50;
+        axes.top = 20;
+        axes.bottom = Math.min(axisBottom, 60);
+        axes.left = 50;
     }
-    if (config.chartType === "lollipop") axisMargins.left = 100;
+    if (config.chartType === "lollipop") axes.left = 100;
 
-    // Final margins = peripheral offset + axis margins
-    const finalMargins: Margins = {
-        top: available.y + axisMargins.top,
-        left: available.x + axisMargins.left,
-        right: (width - (available.x + available.width)) + axisMargins.right,
-        bottom: (height - (available.y + available.height)) + axisMargins.bottom
-    };
-
-    // Clamp margins so chart area is never negative
-    const maxHorizontalMargin = width - 50; // minimum 50px chart width
-    const maxVerticalMargin = height - 30;  // minimum 30px chart height
-    
-    if (finalMargins.left + finalMargins.right > maxHorizontalMargin) {
-        const scale = maxHorizontalMargin / (finalMargins.left + finalMargins.right);
-        finalMargins.left = Math.floor(finalMargins.left * scale);
-        finalMargins.right = Math.floor(finalMargins.right * scale);
-    }
-    if (finalMargins.top + finalMargins.bottom > maxVerticalMargin) {
-        const scale = maxVerticalMargin / (finalMargins.top + finalMargins.bottom);
-        finalMargins.top = Math.floor(finalMargins.top * scale);
-        finalMargins.bottom = Math.floor(finalMargins.bottom * scale);
-    }
-
-    return { width, height, margin: finalMargins, layout };
+    const margins = fitMargins(width, height, {
+        top: available.y + axes.top,
+        left: available.x + axes.left,
+        right: width - (available.x + available.width) + axes.right,
+        bottom: height - (available.y + available.height) + axes.bottom
+    });
+    return { width, height, margin: margins, layout };
 }
 
-/**
- * Compute chart drawing area dimensions from layout dimensions.
- */
 export function getChartArea(dims: LayoutDimensions): { chartWidth: number; chartHeight: number } {
+    const width = finiteNonnegative(dims.width);
+    const height = finiteNonnegative(dims.height);
     return {
-        chartWidth: dims.width - dims.margin.left - dims.margin.right,
-        chartHeight: dims.height - dims.margin.top - dims.margin.bottom
+        chartWidth: Math.max(0, width - finiteNonnegative(dims.margin.left) - finiteNonnegative(dims.margin.right)),
+        chartHeight: Math.max(0, height - finiteNonnegative(dims.margin.top) - finiteNonnegative(dims.margin.bottom))
     };
 }
 
-/**
- * Compute comment box position relative to the chart container (which is at margin.left, margin.top).
- * Comment box is always placed on the right (ZebraBI-style).
- */
 export function getCommentBoxPosition(
     dims: LayoutDimensions
 ): { x: number; y: number; boxWidth: number; boxHeight: number } | null {
-    const { chartWidth, chartHeight } = getChartArea(dims);
-    const x = chartWidth + 10;
-    const commentAllocation = dims.layout?.commentBoxArea
-        ? dims.layout.commentBoxArea.width
-        : 220;
-    const boxWidth = Math.max(80, commentAllocation - 30);
-    return { x, y: 0, boxWidth, boxHeight: chartHeight };
+    const allocation = dims.layout?.commentBoxArea;
+    if (!allocation || allocation.width <= 0 || allocation.height <= 0) return null;
+    return {
+        x: allocation.x - finiteNonnegative(dims.margin.left) + 10,
+        y: allocation.y - finiteNonnegative(dims.margin.top),
+        boxWidth: Math.max(0, allocation.width - 20),
+        boxHeight: allocation.height
+    };
 }
 
-/**
- * Compute legend position relative to the chart container.
- */
 export function getLegendPosition(
     dims: LayoutDimensions,
     legendPosition: string,
@@ -188,28 +211,30 @@ export function getLegendPosition(
     itemCount: number
 ): { x: number; y: number } {
     const { chartWidth, chartHeight } = getChartArea(dims);
-
+    const count = finiteNonnegative(itemCount);
+    const allocation = dims.layout?.legendArea;
+    if (allocation) {
+        const horizontal = legendPosition === "top" || legendPosition === "bottom";
+        return {
+            x: allocation.x - finiteNonnegative(dims.margin.left)
+                + (horizontal ? Math.max(5, (allocation.width - count * 70) / 2) : 0),
+            y: allocation.y - finiteNonnegative(dims.margin.top)
+                + (horizontal ? Math.max(0, (allocation.height - 12) / 2) : 5)
+        };
+    }
     switch (legendPosition) {
-        case "top":
-            return { x: chartWidth / 2 - (itemCount * 70) / 2, y: -25 };
-        case "bottom":
-            return { x: chartWidth / 2 - (itemCount * 70) / 2, y: chartHeight + 30 };
-        case "left":
-            return { x: -dims.margin.left + 5, y: 0 };
-        default: { // right
-            const commentOffset = commentBoxOnRight ? 220 : 0;
-            return { x: chartWidth + commentOffset + 10, y: 0 };
-        }
+        case "top": return { x: chartWidth / 2 - count * 35, y: -25 };
+        case "bottom": return { x: chartWidth / 2 - count * 35, y: chartHeight + 30 };
+        case "left": return { x: -finiteNonnegative(dims.margin.left) + 5, y: 0 };
+        default: return { x: chartWidth + (commentBoxOnRight ? 220 : 0) + 10, y: 0 };
     }
 }
 
-// ─── Small Multiples Layout ───
-
 export interface SmallMultiplesConfig {
-    columns: number;       // 0 = auto
+    columns: number;
     spacing: number;
     showHeaders: boolean;
-    categoryRotation: number;  // e.g. -45
+    categoryRotation: number;
     categoryMaxWidth: number;
     categoryFontSize: number;
 }
@@ -222,134 +247,80 @@ export interface SmallMultiplesGrid {
 }
 
 export interface SmallMultiplesCellLayout {
-    /** Position of cell SVG within the viewport */
     x: number;
     y: number;
-    /** Inner margins for the chart within the cell */
     margin: Margins;
-    /** Height reserved for the group header text */
     headerHeight: number;
-    /** Chart drawing width inside the cell */
     chartWidth: number;
-    /** Chart drawing height inside the cell */
     chartHeight: number;
 }
 
-/**
- * Calculate the small multiples grid dimensions.
- */
 export function calculateSmallMultiplesGrid(
-    totalWidth: number,
-    totalHeight: number,
-    groupCount: number,
+    rawWidth: number,
+    rawHeight: number,
+    rawGroupCount: number,
     config: SmallMultiplesConfig
 ): SmallMultiplesGrid {
-    let cols = config.columns;
-    if (cols <= 0) {
-        cols = Math.min(groupCount, Math.max(1, Math.floor(totalWidth / 250)));
-    }
+    const totalWidth = finiteNonnegative(rawWidth);
+    const totalHeight = finiteNonnegative(rawHeight);
+    const groupCount = Math.max(0, Math.floor(finiteNonnegative(rawGroupCount)));
+    if (groupCount === 0) return { cols: 0, rows: 0, cellWidth: 0, cellHeight: 0 };
+    const spacing = finiteNonnegative(config.spacing);
+    const requestedColumns = Math.floor(finiteNonnegative(config.columns));
+    const cols = requestedColumns > 0
+        ? Math.min(groupCount, requestedColumns)
+        : Math.min(groupCount, Math.max(1, Math.floor(totalWidth / 250)));
     const rows = Math.ceil(groupCount / cols);
-
-    // Safety buffer prevents rounding errors from causing overflow
-    const safetyBuffer = 10;
-    const cellWidth = Math.floor((totalWidth - safetyBuffer - config.spacing * (cols + 1)) / cols);
-    const cellHeight = Math.floor((totalHeight - config.spacing * (rows + 1)) / rows);
-
+    const cellWidth = Math.max(0, Math.floor((totalWidth - 10 - spacing * (cols + 1)) / cols));
+    const cellHeight = Math.max(0, Math.floor((totalHeight - spacing * (rows + 1)) / rows));
     return { cols, rows, cellWidth, cellHeight };
 }
 
-/**
- * Compute the viewport available for the small multiples grid
- * after peripherals (title, legend, comment box) have carved their space.
- * Returns an absolute-positioned rect within the full viewport.
- */
 export function getSmallMultiplesViewport(
-    totalWidth: number,
-    totalHeight: number,
+    rawWidth: number,
+    rawHeight: number,
     config: LayoutConfig
 ): Rect {
-    const available: Rect = { x: 0, y: 0, width: totalWidth, height: totalHeight };
-
-    // Title (top)
-    if (config.title.show) {
-        const h = 30;
-        available.y += h;
-        available.height -= h;
-    }
-
-    // Legend
-    if (config.legend.show) {
-        const position = config.legend.position;
-        const size = (position === "top" || position === "bottom") ? 30 : 80;
-
-        if (position === "top") {
-            available.y += size;
-            available.height -= size;
-        } else if (position === "bottom") {
-            available.height -= size;
-        } else if (position === "left") {
-            available.x += size;
-            available.width -= size;
-        } else { // right
-            available.width -= size;
-        }
-    }
-
-    // Comment box (always right)
-    if (config.commentBox.show && config.hasComments) {
-        const w = 220;
-        available.width -= w;
-    }
-
-    return available;
+    return carvePeripherals(finiteNonnegative(rawWidth), finiteNonnegative(rawHeight), config).chartArea;
 }
 
-/**
- * Calculate the layout for a single cell in the small multiples grid.
- * Returns the cell's position and internal margins that account for
- * category label rotation, ensuring content fits within the cell.
- */
 export function calculateCellLayout(
     grid: SmallMultiplesGrid,
     cellIndex: number,
     config: SmallMultiplesConfig
 ): SmallMultiplesCellLayout {
-    const col = cellIndex % grid.cols;
-    const row = Math.floor(cellIndex / grid.cols);
-    const x = config.spacing + col * (grid.cellWidth + config.spacing);
-    const y = config.spacing + row * (grid.cellHeight + config.spacing);
-    const headerHeight = config.showHeaders ? 20 : 0;
-
-    // Calculate bottom margin dynamically based on category rotation
-    const rot = Math.abs(config.categoryRotation);
-    let bottomMargin: number;
-    if (rot === 0) {
-        bottomMargin = 20 + config.categoryFontSize;
-    } else {
-        // Rotated labels need more space, but cap relative to cell height
-        const rotatedHeight = Math.min(config.categoryMaxWidth, 100) * Math.sin(rot * Math.PI / 180);
-        bottomMargin = 15 + rotatedHeight;
+    const cols = Math.max(0, Math.floor(finiteNonnegative(grid.cols)));
+    const cellWidth = finiteNonnegative(grid.cellWidth);
+    const cellHeight = finiteNonnegative(grid.cellHeight);
+    if (cols === 0 || cellWidth === 0 || cellHeight === 0) {
+        return {
+            x: 0, y: 0,
+            margin: { top: 0, right: 0, bottom: 0, left: 0 },
+            headerHeight: 0, chartWidth: 0, chartHeight: 0
+        };
     }
-
-    // Scale margins to fit within the cell — ensure at least 30% of cell for chart content
-    const availHeight = grid.cellHeight - headerHeight;
-    const sidePad = Math.min(45, Math.floor(grid.cellWidth * 0.15));
-    const topMargin = 10;
-
-    // Clamp bottom margin if it would leave less than 30% for chart
-    const maxBottomMargin = Math.floor(availHeight * 0.4);
-    bottomMargin = Math.min(bottomMargin, maxBottomMargin);
-
-    const margin: Margins = {
-        top: topMargin,
-        right: sidePad,
-        bottom: bottomMargin,
-        left: sidePad,
+    const index = Math.max(0, Math.floor(finiteNonnegative(cellIndex)));
+    const spacing = finiteNonnegative(config.spacing);
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const x = spacing + col * (cellWidth + spacing);
+    const y = spacing + row * (cellHeight + spacing);
+    const headerHeight = config.showHeaders ? Math.min(20, cellHeight) : 0;
+    const availableHeight = Math.max(0, cellHeight - headerHeight);
+    const rotation = Math.abs(Number.isFinite(config.categoryRotation) ? config.categoryRotation : 0);
+    const desiredBottom = rotation === 0
+        ? 20 + finiteNonnegative(config.categoryFontSize)
+        : 15 + Math.min(finiteNonnegative(config.categoryMaxWidth), 100) * Math.sin(rotation * Math.PI / 180);
+    const bottom = Math.min(desiredBottom, Math.floor(availableHeight * 0.4));
+    const top = Math.min(10, Math.max(0, availableHeight - bottom));
+    const side = Math.min(45, Math.floor(cellWidth * 0.15), cellWidth / 2);
+    const margin = { top, right: side, bottom, left: side };
+    return {
+        x,
+        y,
+        margin,
+        headerHeight,
+        chartWidth: Math.max(0, cellWidth - side * 2),
+        chartHeight: Math.max(0, availableHeight - top - bottom)
     };
-
-    const chartWidth = grid.cellWidth - margin.left - margin.right;
-    const chartHeight = availHeight - margin.top - margin.bottom;
-
-    return { x, y, margin, headerHeight, chartWidth, chartHeight };
 }
-

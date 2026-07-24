@@ -5,17 +5,26 @@
  */
 
 export interface MockDataInput {
-    categories: string[];
-    actual: number[];
-    budget?: number[];
-    previousYear?: number[];
-    forecast?: number[];
+    categories: Array<string | number | boolean | Date>;
+    actual: unknown[];
+    budget?: unknown[];
+    previousYear?: unknown[];
+    forecast?: unknown[];
+    formats?: {
+        category?: string;
+        group?: string;
+        actual?: string;
+        budget?: string;
+        previousYear?: string;
+        forecast?: string;
+    };
     tooltipMeasures?: Array<{
         displayName: string;
-        values: Array<string | number | boolean | null | undefined>;
+        values: Array<string | number | boolean | Date | null | undefined>;
+        format?: string;
     }>;
     comments?: string[];
-    groups?: string[];
+    groups?: Array<string | number | boolean | Date>;
 }
 
 /**
@@ -27,7 +36,8 @@ export function buildMockDataView(input: MockDataInput): any {
         source: {
             displayName: "Category",
             queryName: "Table.Category",
-            type: { text: true },
+            type: { text: typeof input.categories[0] === "string" },
+            format: input.formats?.category,
             roles: { category: true }
         },
         values: input.categories
@@ -40,7 +50,8 @@ export function buildMockDataView(input: MockDataInput): any {
             source: {
                 displayName: "Group",
                 queryName: "Table.Group",
-                type: { text: true },
+                type: { text: typeof input.groups[0] === "string" },
+                format: input.formats?.group,
                 roles: { group: true }
             },
             values: input.groups
@@ -65,7 +76,8 @@ export function buildMockDataView(input: MockDataInput): any {
         source: {
             displayName: "Actual",
             queryName: "Table.Actual",
-            roles: { actual: true }
+            roles: { actual: true },
+            format: input.formats?.actual
         },
         values: input.actual
     });
@@ -75,7 +87,8 @@ export function buildMockDataView(input: MockDataInput): any {
             source: {
                 displayName: "Budget",
                 queryName: "Table.Budget",
-                roles: { budget: true }
+                roles: { budget: true },
+                format: input.formats?.budget
             },
             values: input.budget
         });
@@ -86,7 +99,8 @@ export function buildMockDataView(input: MockDataInput): any {
             source: {
                 displayName: "Previous Year",
                 queryName: "Table.PreviousYear",
-                roles: { previousYear: true }
+                roles: { previousYear: true },
+                format: input.formats?.previousYear
             },
             values: input.previousYear
         });
@@ -97,7 +111,8 @@ export function buildMockDataView(input: MockDataInput): any {
             source: {
                 displayName: "Forecast",
                 queryName: "Table.Forecast",
-                roles: { forecast: true }
+                roles: { forecast: true },
+                format: input.formats?.forecast
             },
             values: input.forecast
         });
@@ -109,7 +124,8 @@ export function buildMockDataView(input: MockDataInput): any {
                 source: {
                     displayName: measure.displayName,
                     queryName: `Table.Tooltip${index + 1}`,
-                    roles: { tooltips: true }
+                    roles: { tooltips: true },
+                    format: measure.format
                 },
                 values: measure.values
             });

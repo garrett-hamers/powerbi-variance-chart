@@ -43,16 +43,6 @@ class ChartSettingsCard extends FormattingSettingsCard {
         value: { value: "budget", displayName: "vs Plan" }
     });
 
-    orientation = new formattingSettings.ItemDropdown({
-        name: "orientation",
-        displayName: "Orientation",
-        items: [
-            { value: "vertical", displayName: "Vertical" },
-            { value: "horizontal", displayName: "Horizontal" }
-        ],
-        value: { value: "vertical", displayName: "Vertical" }
-    });
-
     invertVariance = new formattingSettings.ToggleSwitch({
         name: "invertVariance",
         displayName: "Invert Variance (for costs)",
@@ -65,7 +55,6 @@ class ChartSettingsCard extends FormattingSettingsCard {
     slices: Array<FormattingSettingsSlice> = [
         this.chartType, 
         this.comparisonType,
-        this.orientation,
         this.invertVariance
     ];
 }
@@ -483,23 +472,23 @@ class DifferenceHighlightingCard extends FormattingSettingsCard {
 }
 
 /**
- * Axis Break Card - For handling outliers
+ * Axis Break Marker Card - Marks a value without changing the continuous scale.
  */
 class AxisBreakCard extends FormattingSettingsCard {
     show = new formattingSettings.ToggleSwitch({
         name: "show",
-        displayName: "Enable Axis Break",
+        displayName: "Show Axis Break Marker",
         value: false
     });
 
     breakValue = new formattingSettings.NumUpDown({
         name: "breakValue",
-        displayName: "Break at Value",
+        displayName: "Marker Value",
         value: 0
     });
 
     name: string = "axisBreak";
-    displayName: string = "Axis Break";
+    displayName: string = "Axis Break Marker";
     slices: Array<FormattingSettingsSlice> = [
         this.show,
         this.breakValue
@@ -539,13 +528,6 @@ class InteractionCard extends FormattingSettingsCard {
         value: { value: "highlight", displayName: "Highlight" }
     });
 
-    enableTelemetry = new formattingSettings.ToggleSwitch({
-        name: "enableTelemetry",
-        displayName: "Enable Telemetry (Console)",
-        description: "Log detailed layout information to browser console",
-        value: false
-    });
-
     name: string = "interaction";
     displayName: string = "Interaction";
     slices: Array<FormattingSettingsSlice> = [
@@ -563,7 +545,7 @@ class AboutCard extends FormattingSettingsCard {
     version = new formattingSettings.TextInput({
         name: "version",
         displayName: "Version",
-        value: "1.0.0",
+        value: "1.8.1.0",
         placeholder: ""
     });
 
