@@ -8,6 +8,10 @@ import { BasicFilter, TupleFilter } from "powerbi-models";
 import { Visual } from "../src/visual";
 import { buildMockDataView } from "./helpers/mockDataView";
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import less from "less";
+
 import DataView = powerbi.DataView;
 import ISelectionId = powerbi.visuals.ISelectionId;
 import ISelectionIdBuilder = powerbi.visuals.ISelectionIdBuilder;
@@ -294,6 +298,15 @@ describe("Visual host integration", () => {
     });
 
     it("highlights the matching comment affordances and clears them with selection", async () => {
+        const lessSource = readFileSync(
+            join(process.cwd(), "style", "visual.less"),
+            "utf8"
+        );
+        const compiled = await less.render(lessSource);
+        const styleElement = document.createElement("style");
+        styleElement.textContent = compiled.css;
+        document.head.appendChild(styleElement);
+
         const view = dataView({
             categories: ["A", "B"],
             actual: [10, 20],
@@ -307,9 +320,16 @@ describe("Visual host integration", () => {
         expect(matching.length).toBeGreaterThan(1);
         expect(Array.from(matching).every(node => node.classList.contains("comment-highlighted"))).toBe(true);
 
+        // Guard against the highlight rule being nested where markers never live:
+        // the compiled stylesheet must actually resolve stroke-width onto the marker.
+        const marker = element.querySelector<SVGElement>("circle.comment-marker.comment-highlighted");
+        expect(marker).not.toBeNull();
+        expect(getComputedStyle(marker!).strokeWidth).toBe("3px");
+
         dispatchClick(element.querySelector("svg.varianceChart")!);
         await Promise.resolve();
         expect(element.querySelector(".comment-highlighted")).toBeNull();
+        styleElement.remove();
     });
 
     it("keeps grouped Top N Others inside every small-multiple group", () => {
@@ -564,6 +584,35 @@ describe("Visual host integration", () => {
         dispatchClick(firstPoint(element, "0"), { ctrlKey: true });
         const toggled = harness.applyJsonFilter.mock.calls[2][0] as TupleFilter;
         expect(toggled.values).toEqual([[{ value: "Same" }, { value: "West" }]]);
+    });
+
+    it("derives the filter target from the last dot of a multi-segment queryName", () => {
+        const view = dataView({ categories: ["A"], actual: [10], budget: [8] });
+        const category = view.categorical?.categories?.[0];
+        if (!category) throw new Error("category missing");
+        category.source.queryName = "Model.Sales.Region";
+        setObjects(view, { interaction: { crossFilterMode: "filter" } });
+        visual.update(updateOptions(view));
+        dispatchClick(firstPoint(element));
+        const filter = harness.applyJsonFilter.mock.calls[0][0] as BasicFilter;
+        expect(filter.target).toEqual({ table: "Model.Sales", column: "Region" });
+    });
+
+    it.each([
+        ["a queryName without a separator", "Region"],
+        ["a leading-dot queryName", ".Region"],
+        ["a trailing-dot queryName", "Table."]
+    ])("applies no filter and reports an error for %s", (_name, queryName) => {
+        const view = dataView({ categories: ["A"], actual: [10], budget: [8] });
+        const category = view.categorical?.categories?.[0];
+        if (!category) throw new Error("category missing");
+        category.source.queryName = queryName;
+        category.source.displayName = "Region";
+        setObjects(view, { interaction: { crossFilterMode: "filter" } });
+        visual.update(updateOptions(view));
+        dispatchClick(firstPoint(element));
+        expect(harness.applyJsonFilter).not.toHaveBeenCalled();
+        expect(element.querySelector('[role="status"]')?.textContent).toContain("could not be completed");
     });
 
     it("adds and removes every represented grouped tuple through Others", () => {

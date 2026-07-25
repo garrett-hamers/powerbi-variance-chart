@@ -5,7 +5,7 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
 ![Power BI](https://img.shields.io/badge/Power_BI-API_5.11.1-yellow)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Tests](https://img.shields.io/badge/Tests-285_passing-brightgreen)
-![Version](https://img.shields.io/badge/Version-1.8.1.0-blue)
+![Version](https://img.shields.io/badge/Version-1.8.2.0-blue)
 
 ---
 

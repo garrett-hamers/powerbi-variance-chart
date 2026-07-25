@@ -1,7 +1,7 @@
 {
   "name": "atlyn-variance-chart",
   "description": "Open-source variance analysis visual for Microsoft Power BI.",
-  "version": "1.8.1.0",
+  "version": "1.8.2.0",
   "private": true,
   "repository": {
     "type": "git",
@@ -12,11 +12,14 @@
     "pbiviz": "pbiviz",
     "start": "pbiviz start",
     "package": "pbiviz package --certification-audit",
+    "audit": "npm audit --audit-level=moderate",
     "eslint": "npx eslint . --ext .js,.jsx,.ts,.tsx",
     "lint": "npm run eslint",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "certify": "npm run audit && npm run eslint && npm run typecheck && npm run test && npm run package"
   },
   "dependencies": {
     "d3": "^7.9.0",
@@ -27,7 +30,7 @@
   },
   "devDependencies": {
     "@types/d3": "^7.4.3",
-    "eslint": "9.39.5",
+    "eslint": "10.8.0",
     "eslint-plugin-powerbi-visuals": "1.1.1",
     "happy-dom": "20.11.0",
     "less": "^4.5.1",

@@ -545,7 +545,7 @@ class AboutCard extends FormattingSettingsCard {
     version = new formattingSettings.TextInput({
         name: "version",
         displayName: "Version",
-        value: "1.8.1.0",
+        value: "1.8.2.0",
         placeholder: ""
     });
 
