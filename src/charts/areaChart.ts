@@ -55,6 +55,17 @@ export class AreaChart extends BaseChart {
         const showLabels = (this.settings.dataLabels?.show ?? false)
             && this.settings.dataLabels.showValues;
         const fontSize = this.settings.dataLabels?.fontSize ?? this.settings.fontSize;
+
+        // Only the actual series is labelled, so it alone drives the plan.
+        this.planAutoLabels(
+            dataPoints.map((point, position) => ({
+                index: position,
+                center: (xScale(this.pointKey(point, position)) ?? 0) + xScale.bandwidth() / 2,
+                text: point.actual === null ? "" : this.formatValue(point.actual)
+            })),
+            dataPoints.map(point => point.actual)
+        );
+
         [...series].reverse().forEach(item => {
             const areaData: AreaPoint[] = dataPoints.map((point, position) => ({
                 key: this.pointKey(point, position),

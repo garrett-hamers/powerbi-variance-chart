@@ -58,6 +58,16 @@ export class DotChart extends BaseChart {
         const showLabels = this.settings.dataLabels?.show ?? false;
         const fontSize = this.settings.dataLabels?.fontSize ?? this.settings.fontSize;
         const varianceValues = dataPoints.map(point => this.getVarianceForPoint(point));
+
+        this.planAutoLabels(
+            dataPoints.map((point, position) => ({
+                index: position,
+                center: (xScale(this.pointKey(point, position)) ?? 0) + xScale.bandwidth() / 2,
+                text: this.formatVarianceLabel(point)
+            })),
+            varianceValues
+        );
+
         dataPoints.forEach((point, position) => {
             const cx = (xScale(this.pointKey(point, position)) ?? 0) + xScale.bandwidth() / 2;
             const comparison = this.getComparisonForPoint(point);

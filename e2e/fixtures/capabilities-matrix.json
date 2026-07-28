@@ -1,0 +1,782 @@
+{
+  "visualName": "atlynVarianceChart",
+  "apiVersion": "5.11.1",
+  "dataRoles": [
+    {
+      "name": "category",
+      "displayName": "Category",
+      "kind": "Grouping"
+    },
+    {
+      "name": "group",
+      "displayName": "Group",
+      "kind": "Grouping"
+    },
+    {
+      "name": "actual",
+      "displayName": "Values",
+      "kind": "Measure"
+    },
+    {
+      "name": "previousYear",
+      "displayName": "Previous Year",
+      "kind": "Measure"
+    },
+    {
+      "name": "budget",
+      "displayName": "Plan",
+      "kind": "Measure"
+    },
+    {
+      "name": "forecast",
+      "displayName": "Forecast",
+      "kind": "Measure"
+    },
+    {
+      "name": "tooltips",
+      "displayName": "Tooltips",
+      "kind": "Measure"
+    },
+    {
+      "name": "comments",
+      "displayName": "Comments",
+      "kind": "Grouping"
+    }
+  ],
+  "conditions": [
+    {
+      "category": {
+        "max": 1
+      },
+      "group": {
+        "max": 1
+      },
+      "actual": {
+        "max": 1
+      },
+      "previousYear": {
+        "max": 1
+      },
+      "budget": {
+        "max": 1
+      },
+      "forecast": {
+        "max": 1
+      },
+      "comments": {
+        "max": 1
+      }
+    }
+  ],
+  "supports": {
+    "highlight": false,
+    "keyboardFocus": true,
+    "landingPage": true,
+    "multiVisualSelection": true,
+    "synchronizingFilterState": true,
+    "drilldown": {
+      "roles": [
+        "category"
+      ]
+    },
+    "tooltipsDefault": true,
+    "tooltipsCanvas": true
+  },
+  "properties": [
+    {
+      "objectName": "general",
+      "propertyName": "filter",
+      "type": "filter",
+      "isFilter": true,
+      "defaultValue": null
+    },
+    {
+      "objectName": "chartSettings",
+      "propertyName": "chartType",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "variance",
+          "displayName": "Variance Chart"
+        },
+        {
+          "value": "waterfall",
+          "displayName": "Waterfall Chart"
+        },
+        {
+          "value": "column",
+          "displayName": "Column Chart"
+        },
+        {
+          "value": "columnStacked",
+          "displayName": "Stacked Column"
+        },
+        {
+          "value": "bar",
+          "displayName": "Bar Chart"
+        },
+        {
+          "value": "line",
+          "displayName": "Line Chart"
+        },
+        {
+          "value": "area",
+          "displayName": "Area Chart"
+        },
+        {
+          "value": "combo",
+          "displayName": "Combo Chart"
+        },
+        {
+          "value": "dot",
+          "displayName": "Dot Chart"
+        },
+        {
+          "value": "lollipop",
+          "displayName": "Lollipop Chart"
+        }
+      ]
+    },
+    {
+      "objectName": "chartSettings",
+      "propertyName": "comparisonType",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "budget",
+          "displayName": "vs Plan"
+        },
+        {
+          "value": "previousYear",
+          "displayName": "vs Previous Year"
+        },
+        {
+          "value": "forecast",
+          "displayName": "vs Forecast"
+        }
+      ]
+    },
+    {
+      "objectName": "chartSettings",
+      "propertyName": "invertVariance",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "title",
+      "propertyName": "show",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "title",
+      "propertyName": "titleText",
+      "type": "text",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "title",
+      "propertyName": "fontSize",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "title",
+      "propertyName": "fontColor",
+      "type": "color",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "title",
+      "propertyName": "alignment",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "left",
+          "displayName": "Left"
+        },
+        {
+          "value": "center",
+          "displayName": "Center"
+        },
+        {
+          "value": "right",
+          "displayName": "Right"
+        }
+      ]
+    },
+    {
+      "objectName": "dataLabels",
+      "propertyName": "show",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "dataLabels",
+      "propertyName": "showValues",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "dataLabels",
+      "propertyName": "showVariance",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "dataLabels",
+      "propertyName": "showPercentage",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "dataLabels",
+      "propertyName": "fontSize",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "dataLabels",
+      "propertyName": "decimalPlaces",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "dataLabels",
+      "propertyName": "displayUnits",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "auto",
+          "displayName": "Auto"
+        },
+        {
+          "value": "none",
+          "displayName": "None"
+        },
+        {
+          "value": "thousands",
+          "displayName": "Thousands (K)"
+        },
+        {
+          "value": "millions",
+          "displayName": "Millions (M)"
+        },
+        {
+          "value": "billions",
+          "displayName": "Billions (B)"
+        }
+      ]
+    },
+    {
+      "objectName": "dataLabels",
+      "propertyName": "negativeFormat",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "minus",
+          "displayName": "-1,234"
+        },
+        {
+          "value": "parentheses",
+          "displayName": "(1,234)"
+        }
+      ]
+    },
+    {
+      "objectName": "dataLabels",
+      "propertyName": "labelDensity",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "all",
+          "displayName": "All"
+        },
+        {
+          "value": "auto",
+          "displayName": "Auto (avoid category overlap)"
+        },
+        {
+          "value": "firstLast",
+          "displayName": "First & Last"
+        },
+        {
+          "value": "minMax",
+          "displayName": "Min & Max"
+        },
+        {
+          "value": "none",
+          "displayName": "None"
+        }
+      ]
+    },
+    {
+      "objectName": "categories",
+      "propertyName": "show",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "categories",
+      "propertyName": "fontSize",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "categories",
+      "propertyName": "fontColor",
+      "type": "color",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "categories",
+      "propertyName": "rotation",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "0",
+          "displayName": "0°"
+        },
+        {
+          "value": "-45",
+          "displayName": "-45°"
+        },
+        {
+          "value": "-90",
+          "displayName": "-90°"
+        },
+        {
+          "value": "45",
+          "displayName": "45°"
+        },
+        {
+          "value": "90",
+          "displayName": "90°"
+        }
+      ]
+    },
+    {
+      "objectName": "categories",
+      "propertyName": "maxWidth",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "legend",
+      "propertyName": "show",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "legend",
+      "propertyName": "position",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "top",
+          "displayName": "Top"
+        },
+        {
+          "value": "bottom",
+          "displayName": "Bottom"
+        },
+        {
+          "value": "left",
+          "displayName": "Left"
+        },
+        {
+          "value": "right",
+          "displayName": "Right"
+        }
+      ]
+    },
+    {
+      "objectName": "legend",
+      "propertyName": "fontSize",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "commentBox",
+      "propertyName": "show",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "commentBox",
+      "propertyName": "showVariance",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "none",
+          "displayName": "None"
+        },
+        {
+          "value": "absolute",
+          "displayName": "Absolute variance"
+        },
+        {
+          "value": "relative",
+          "displayName": "Relative variance"
+        },
+        {
+          "value": "both",
+          "displayName": "Both"
+        }
+      ]
+    },
+    {
+      "objectName": "commentBox",
+      "propertyName": "varianceIcon",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "none",
+          "displayName": "None"
+        },
+        {
+          "value": "triangle",
+          "displayName": "Triangle"
+        },
+        {
+          "value": "circle",
+          "displayName": "Circle"
+        },
+        {
+          "value": "arrow",
+          "displayName": "Arrow"
+        }
+      ]
+    },
+    {
+      "objectName": "commentBox",
+      "propertyName": "padding",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "commentBox",
+      "propertyName": "gap",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "commentBox",
+      "propertyName": "fontSize",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "commentBox",
+      "propertyName": "fontColor",
+      "type": "color",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "commentBox",
+      "propertyName": "markerSize",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "commentBox",
+      "propertyName": "markerColor",
+      "type": "color",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "design",
+      "propertyName": "actualColor",
+      "type": "color",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "design",
+      "propertyName": "budgetColor",
+      "type": "color",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "design",
+      "propertyName": "previousYearColor",
+      "type": "color",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "design",
+      "propertyName": "forecastColor",
+      "type": "color",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "design",
+      "propertyName": "positiveVarianceColor",
+      "type": "color",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "design",
+      "propertyName": "negativeVarianceColor",
+      "type": "color",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "differenceHighlighting",
+      "propertyName": "show",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "differenceHighlighting",
+      "propertyName": "threshold",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "differenceHighlighting",
+      "propertyName": "highlightPositive",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "differenceHighlighting",
+      "propertyName": "highlightNegative",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "axisBreak",
+      "propertyName": "show",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "axisBreak",
+      "propertyName": "breakValue",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "interaction",
+      "propertyName": "enableSelection",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "interaction",
+      "propertyName": "enableTooltips",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "interaction",
+      "propertyName": "enableDrilldown",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "interaction",
+      "propertyName": "crossFilterMode",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "highlight",
+          "displayName": "Highlight"
+        },
+        {
+          "value": "filter",
+          "displayName": "Filter"
+        }
+      ]
+    },
+    {
+      "objectName": "about",
+      "propertyName": "version",
+      "type": "text",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "topN",
+      "propertyName": "enable",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "topN",
+      "propertyName": "count",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "topN",
+      "propertyName": "sortBy",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "value",
+          "displayName": "Value"
+        },
+        {
+          "value": "name",
+          "displayName": "Name"
+        },
+        {
+          "value": "variance",
+          "displayName": "Variance"
+        }
+      ]
+    },
+    {
+      "objectName": "topN",
+      "propertyName": "sortDirection",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "desc",
+          "displayName": "Descending"
+        },
+        {
+          "value": "asc",
+          "displayName": "Ascending"
+        }
+      ]
+    },
+    {
+      "objectName": "topN",
+      "propertyName": "showOthers",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "topN",
+      "propertyName": "othersLabel",
+      "type": "text",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "smallMultiples",
+      "propertyName": "columns",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "smallMultiples",
+      "propertyName": "spacing",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "smallMultiples",
+      "propertyName": "showHeaders",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "smallMultiples",
+      "propertyName": "scaleMode",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "shared",
+          "displayName": "Shared (same scale)"
+        },
+        {
+          "value": "independent",
+          "displayName": "Independent"
+        }
+      ]
+    },
+    {
+      "objectName": "responsive",
+      "propertyName": "enable",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "responsive",
+      "propertyName": "minChartWidth",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    }
+  ],
+  "propertyCount": 64,
+  "warnings": [],
+  "generatedAt": "2026-07-28T01:43:21.362Z"
+}

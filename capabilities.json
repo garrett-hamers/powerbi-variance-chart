@@ -173,6 +173,7 @@
                     "type": {
                         "enumeration": [
                             { "value": "all", "displayName": "All" },
+                            { "value": "auto", "displayName": "Auto (avoid category overlap)" },
                             { "value": "firstLast", "displayName": "First & Last" },
                             { "value": "minMax", "displayName": "Min & Max" },
                             { "value": "none", "displayName": "None" }

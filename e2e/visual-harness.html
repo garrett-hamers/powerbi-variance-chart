@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Variance Chart — Preview</title>
+<style>
+  body { margin: 0; padding: 20px; background: #fff; font-family: "Segoe UI", sans-serif; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .cell { border: 1px solid #e0e0e0; border-radius: 8px; padding: 8px; background: #fafafa; }
+  svg.varianceChart { display: block; }
+</style>
+</head>
+<body>
+<div class="grid">
+  <div class="cell"><div id="variance"></div></div>
+  <div class="cell"><div id="waterfall"></div></div>
+  <div class="cell"><div id="column"></div></div>
+  <div class="cell"><div id="columnStacked"></div></div>
+  <div class="cell"><div id="bar"></div></div>
+  <div class="cell"><div id="line"></div></div>
+  <div class="cell"><div id="area"></div></div>
+  <div class="cell"><div id="combo"></div></div>
+  <div class="cell"><div id="dot"></div></div>
+  <div class="cell"><div id="lollipop"></div></div>
+</div>
+<script src="./visual-harness-bundle.js"></script>
+</body>
+</html>

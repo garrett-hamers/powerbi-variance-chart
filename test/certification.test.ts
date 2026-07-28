@@ -57,4 +57,66 @@ describe("certification gate", () => {
         expect(auditStep).toBeGreaterThanOrEqual(0);
         expect(packageStep).toBeGreaterThan(auditStep);
     });
+
+    it("keeps the four-part version identical across every packaged manifest", () => {
+        const read = (file: string) =>
+            JSON.parse(readFileSync(join(process.cwd(), file), "utf8"));
+
+        const pkg = read("package.json") as { version: string };
+        const lock = read("package-lock.json") as {
+            version: string;
+            packages: Record<string, { version?: string }>;
+        };
+        const pbiviz = read("pbiviz.json") as {
+            visual: { version: string; guid: string };
+            version: string;
+            apiVersion: string;
+        };
+
+        const fourPart = /^\d+\.\d+\.\d+\.\d+$/;
+        expect(pkg.version).toMatch(fourPart);
+
+        // A mismatch here ships a package whose reported version disagrees with the
+        // source, which breaks the certification requirement that the compiled package
+        // exactly matches the submitted one.
+        expect(pbiviz.visual.version).toBe(pkg.version);
+        expect(pbiviz.version).toBe(pkg.version);
+        expect(lock.version).toBe(pkg.version);
+        expect(lock.packages[""]?.version).toBe(pkg.version);
+
+        // The About card is what a report author actually sees in the format pane.
+        const settingsSource = readFileSync(join(process.cwd(), "src/settings.ts"), "utf8");
+        expect(settingsSource).toContain(`value: "${pkg.version}"`);
+
+        const readme = readFileSync(join(process.cwd(), "README.md"), "utf8");
+        expect(readme).toContain(`Version-${pkg.version}-blue`);
+    });
+
+    it("keeps the visual GUID and pinned API version stable", () => {
+        const pbiviz = JSON.parse(
+            readFileSync(join(process.cwd(), "pbiviz.json"), "utf8")
+        ) as { visual: { guid: string }; apiVersion: string; externalJS: unknown; stringResources: unknown[] };
+        const pkg = JSON.parse(
+            readFileSync(join(process.cwd(), "package.json"), "utf8")
+        ) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };
+
+        // Regenerating the GUID orphans every existing report that uses the visual.
+        expect(pbiviz.visual.guid).toBe("varianceChart8E466B43903E4620A971846965AD2671");
+
+        // apiVersion must track the installed powerbi-visuals-api exactly.
+        expect(pbiviz.apiVersion).toBe(pkg.dependencies["powerbi-visuals-api"]);
+        expect(pkg.dependencies["powerbi-visuals-api"]).toMatch(/^\d+\.\d+\.\d+$/);
+        expect(pkg.devDependencies["powerbi-visuals-tools"]).toMatch(/^\d+\.\d+\.\d+$/);
+
+        // Certification requires no external script loading.
+        expect(pbiviz.externalJS).toBeNull();
+    });
+
+    it("declares no privileges, so no WebAccess can slip in", () => {
+        const capabilities = JSON.parse(
+            readFileSync(join(process.cwd(), "capabilities.json"), "utf8")
+        ) as { privileges: unknown[] };
+        expect(Array.isArray(capabilities.privileges)).toBe(true);
+        expect(capabilities.privileges).toHaveLength(0);
+    });
 });

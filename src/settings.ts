@@ -6,6 +6,8 @@
 
 import { formattingSettings } from "powerbi-visuals-utils-formattingmodel";
 
+import { DEFAULT_IBCS_COLORS } from "./utils/colors";
+
 import FormattingSettingsCard = formattingSettings.SimpleCard;
 import FormattingSettingsSlice = formattingSettings.Slice;
 import FormattingSettingsModel = formattingSettings.Model;
@@ -176,8 +178,10 @@ class DataLabelsCard extends FormattingSettingsCard {
     labelDensity = new formattingSettings.ItemDropdown({
         name: "labelDensity",
         displayName: "Label Density",
+        description: "Auto measures each label and hides whole categories only where they would collide with a neighbouring category, always keeping the first, last, minimum and maximum",
         items: [
             { value: "all", displayName: "All" },
+            { value: "auto", displayName: "Auto (avoid category overlap)" },
             { value: "firstLast", displayName: "First & Last" },
             { value: "minMax", displayName: "Min & Max" },
             { value: "none", displayName: "None" }
@@ -382,42 +386,42 @@ class DesignCard extends FormattingSettingsCard {
         name: "actualColor",
         displayName: "Actual/Values",
         description: "Color for actual values (IBCS: solid dark)",
-        value: { value: "#404040" }
+        value: { value: DEFAULT_IBCS_COLORS.actual }
     });
 
     budgetColor = new formattingSettings.ColorPicker({
         name: "budgetColor",
         displayName: "Plan",
         description: "Color for plan values (IBCS: outlined)",
-        value: { value: "#808080" }
+        value: { value: DEFAULT_IBCS_COLORS.budget }
     });
 
     previousYearColor = new formattingSettings.ColorPicker({
         name: "previousYearColor",
         displayName: "Previous Year",
         description: "Color for previous year values (IBCS: light gray)",
-        value: { value: "#9E9E9E" }
+        value: { value: DEFAULT_IBCS_COLORS.previousYear }
     });
 
     forecastColor = new formattingSettings.ColorPicker({
         name: "forecastColor",
         displayName: "Forecast",
         description: "Color for forecast values (IBCS: hatched)",
-        value: { value: "#606060" }
+        value: { value: DEFAULT_IBCS_COLORS.forecast }
     });
 
     positiveVarianceColor = new formattingSettings.ColorPicker({
         name: "positiveVarianceColor",
         displayName: "Positive Variance",
         description: "Color for favorable variances (IBCS: green)",
-        value: { value: "#4CAF50" }
+        value: { value: DEFAULT_IBCS_COLORS.positiveVariance }
     });
 
     negativeVarianceColor = new formattingSettings.ColorPicker({
         name: "negativeVarianceColor",
         displayName: "Negative Variance",
         description: "Color for unfavorable variances (IBCS: red)",
-        value: { value: "#F44336" }
+        value: { value: DEFAULT_IBCS_COLORS.negativeVariance }
     });
 
     name: string = "design";
@@ -545,7 +549,7 @@ class AboutCard extends FormattingSettingsCard {
     version = new formattingSettings.TextInput({
         name: "version",
         displayName: "Version",
-        value: "1.8.2.0",
+        value: "1.8.3.0",
         placeholder: ""
     });
 

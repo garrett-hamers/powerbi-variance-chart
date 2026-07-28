@@ -1,0 +1,128 @@
+{
+  "metadata": {
+    "columns": [
+      {
+        "displayName": "Month",
+        "queryName": "Table.Month",
+        "type": {
+          "text": true
+        },
+        "roles": {
+          "category": true
+        }
+      },
+      {
+        "displayName": "Actual",
+        "queryName": "Sum(Actual)",
+        "type": {
+          "numeric": true
+        },
+        "format": "$#,0",
+        "roles": {
+          "actual": true
+        },
+        "isMeasure": true
+      },
+      {
+        "displayName": "Prior Year",
+        "queryName": "Sum(PriorYear)",
+        "type": {
+          "numeric": true
+        },
+        "format": "$#,0",
+        "roles": {
+          "previousYear": true
+        },
+        "isMeasure": true
+      }
+    ]
+  },
+  "categorical": {
+    "categories": [
+      {
+        "source": {
+          "displayName": "Month",
+          "queryName": "Table.Month",
+          "type": {
+            "text": true
+          },
+          "roles": {
+            "category": true
+          }
+        },
+        "values": [
+          "Jan",
+          "Feb",
+          "Mar",
+          "Apr",
+          "May",
+          "Jun",
+          "Jul",
+          "Aug",
+          "Sep",
+          "Oct",
+          "Nov",
+          "Dec"
+        ]
+      }
+    ],
+    "values": [
+      {
+        "source": {
+          "displayName": "Actual",
+          "queryName": "Sum(Actual)",
+          "type": {
+            "numeric": true
+          },
+          "format": "$#,0",
+          "roles": {
+            "actual": true
+          },
+          "isMeasure": true
+        },
+        "values": [
+          820,
+          910,
+          1050,
+          980,
+          1120,
+          1280,
+          1340,
+          1410,
+          1290,
+          1360,
+          1480,
+          1620
+        ]
+      },
+      {
+        "source": {
+          "displayName": "Prior Year",
+          "queryName": "Sum(PriorYear)",
+          "type": {
+            "numeric": true
+          },
+          "format": "$#,0",
+          "roles": {
+            "previousYear": true
+          },
+          "isMeasure": true
+        },
+        "values": [
+          710,
+          790,
+          880,
+          900,
+          960,
+          1080,
+          1150,
+          1210,
+          1180,
+          1240,
+          1320,
+          1440
+        ]
+      }
+    ]
+  }
+}

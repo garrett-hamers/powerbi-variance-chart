@@ -41,6 +41,33 @@ export class VarianceChart extends BaseChart {
         const baseline = yScale(0);
         const actualValues = dataPoints.map(point => point.actual);
 
+        // The variance chart draws up to two labels per category: the actual value over
+        // the actual bar, and the variance over the variance bar. Both are submitted so
+        // the reserved footprint matches what is really painted.
+        this.planAutoLabels(
+            dataPoints.flatMap((point, position) => {
+                const xPos = xScale(this.pointKey(point, position)) ?? 0;
+                const slots = [{
+                    index: position,
+                    center: comparisonPresentation
+                        ? xPos + barWidth + 2 + barWidth / 2
+                        : xPos + xScale.bandwidth() / 2,
+                    text: point.actual === null || !this.settings.dataLabels.showValues
+                        ? ""
+                        : this.formatValue(point.actual)
+                }];
+                if (comparisonPresentation) {
+                    slots.push({
+                        index: position,
+                        center: xPos + (barWidth + 2) * 2 + barWidth / 2,
+                        text: this.getVarianceForPoint(point) === null ? "" : this.formatVarianceLabel(point)
+                    });
+                }
+                return slots;
+            }),
+            actualValues
+        );
+
         dataPoints.forEach((point, position) => {
             const xPos = xScale(this.pointKey(point, position)) ?? 0;
             const comparison = this.getComparisonForPoint(point);

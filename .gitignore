@@ -2,4 +2,10 @@ node_modules/
 dist/
 .tmp/
 coverage/
+test-results/
+playwright-report/
+e2e/visual-harness-bundle.js
+e2e/screenshots/
+e2e/format-pane-results.*.json
+e2e/perf-results.json
 webpack.statistics*.html

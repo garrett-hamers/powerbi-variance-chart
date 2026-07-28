@@ -4,8 +4,8 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
 
 ![Power BI](https://img.shields.io/badge/Power_BI-API_5.11.1-yellow)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Tests](https://img.shields.io/badge/Tests-285_passing-brightgreen)
-![Version](https://img.shields.io/badge/Version-1.8.2.0-blue)
+![Tests](https://img.shields.io/badge/Tests-359_passing-brightgreen)
+![Version](https://img.shields.io/badge/Version-1.8.3.0-blue)
 
 ---
 
@@ -55,7 +55,11 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
 
 ### Data Labels
 - Show values, variance, and percentage
-- Label density: All, First & Last, Min & Max, None
+- Label density: All, **Auto**, First & Last, Min & Max, None
+- **Auto** measures every label off-DOM and hides categories only where their labels
+  would collide with a neighbouring category, always keeping the first, last, minimum
+  and maximum. Labels belonging to the same category (for example a grouped column's
+  per-series values) are shown or hidden together.
 - Configurable decimal places and display units (Auto, K, M, B)
 - Negative format: minus sign or parentheses
 
@@ -82,7 +86,7 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
 |------|---------|
 | **Chart Settings** | Chart type, comparison mode (vs Plan / vs PY / vs Forecast), invert variance |
 | **Title** | Show/hide, text, font size, color, alignment |
-| **Data Labels** | Values, variance, percentage, font size, decimal places, display units, negative format, label density |
+| **Data Labels** | Values, variance, percentage, font size, decimal places, display units, negative format, label density (incl. Auto overlap avoidance) |
 | **Categories** | Show/hide axis, font size, color, rotation, max width |
 | **Legend** | Show/hide, position (top/bottom/left/right), font size |
 | **Comments** | Show/hide, variance display, variance icon style, padding, gap, font, marker size/color |
@@ -107,25 +111,26 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
 
 ```bash
 # Install dependencies
-npm install
+npm ci
 
 # Start dev server (requires Power BI developer mode)
 npm start
 
-# Run tests
+# Run unit tests
 npm test
 
-# Run certification lint/audit and package for distribution
-npm run eslint
-npm audit
-npm run package
+# Run the full local gate: audit + eslint + typecheck + tests + package
+npm run certify
 ```
+
+There is no hosted CI for this repository. `npm run certify` is the only supported
+validation entry point — run it from a clean `npm ci` before considering a change ready.
 
 ---
 
 ## Testing
 
-285 automated tests across four test files:
+359 automated unit tests, plus a browser-based end-to-end suite.
 
 | Suite | Coverage |
 |-------|----------|
@@ -133,10 +138,27 @@ npm run package
 | Data Parser | Model formats, variance math, grouped Top N, null/nonfinite/extreme values |
 | Chart Rendering | All ten chart types, signs, labels, shared scales, waterfall reconciliation, high contrast |
 | Visual Integration | Rendering events, identities, filters, context menus, keyboard/ARIA, themes, resize/scroll |
+| Text Measurement | Memoised width measurement, ellipsis truncation, label collision resolution, Auto density across all ten chart types |
+| Certification | Real `npm audit` gate, version consistency across manifests, GUID and API pinning, empty privileges |
+| Capabilities Matrix | Every format-pane object/property is declared and reachable |
 
 ```bash
 npm test
 ```
+
+### End-to-end (Playwright)
+
+189 browser tests covering accessibility (axe-core, keyboard, ARIA), context menus,
+format-pane coverage, theming (light/dark/high-contrast), performance budgets, and
+rendering of every chart type.
+
+```bash
+npx playwright install chromium   # one time
+npm run preview
+```
+
+The e2e suite is deliberately excluded from `npm run certify` so the certification gate
+stays fast and free of browser downloads.
 
 ---
 
