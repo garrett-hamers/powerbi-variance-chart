@@ -56,6 +56,21 @@ export class LineChart extends BaseChart {
             && this.settings.dataLabels.showValues;
         const fontSize = this.settings.dataLabels?.fontSize ?? this.settings.fontSize;
 
+        // Every series labels the same category at the same x, so the category's
+        // footprint is the widest series label; submit one slot per series and let
+        // planAutoLabels take the union.
+        this.planAutoLabels(
+            dataPoints.flatMap((point, position) => {
+                const center = (xScale(this.pointKey(point, position)) ?? 0) + xScale.bandwidth() / 2;
+                return series.map(item => ({
+                    index: position,
+                    center,
+                    text: point[item.key] === null ? "" : this.formatValue(point[item.key], item.key)
+                }));
+            }),
+            dataPoints.map(point => point.actual)
+        );
+
         series.forEach(item => {
             const lineData: LinePoint[] = dataPoints.map((point, position) => ({
                 key: this.pointKey(point, position),

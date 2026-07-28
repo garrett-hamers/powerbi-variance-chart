@@ -57,6 +57,16 @@ export class ComboChart extends BaseChart {
         const fontSize = this.settings.dataLabels?.fontSize ?? this.settings.fontSize;
         const actualValues = dataPoints.map(point => point.actual);
         const baseline = yScale(0);
+
+        this.planAutoLabels(
+            dataPoints.map((point, position) => ({
+                index: position,
+                center: (xScale(this.pointKey(point, position)) ?? 0) + xScale.bandwidth() / 2,
+                text: point.actual === null ? "" : this.formatValue(point.actual)
+            })),
+            actualValues
+        );
+
         dataPoints.forEach((point, position) => {
             if (point.actual === null) return;
             const xPos = xScale(this.pointKey(point, position)) ?? 0;

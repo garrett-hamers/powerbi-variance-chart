@@ -494,7 +494,7 @@ export class Visual implements IVisual {
                 ),
                 labelDensity: enumSetting(
                     labels.labelDensity.value.value,
-                    ["all", "firstLast", "minMax", "none"],
+                    ["all", "auto", "firstLast", "minMax", "none"],
                     "all"
                 )
             },

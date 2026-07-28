@@ -15,6 +15,12 @@ import {
 } from "../dataParser";
 import { IBCSColors, getVarianceColor } from "../utils/colors";
 import { formatNumber, formatPercent, NumberScale } from "../utils/formatting";
+import {
+    DEFAULT_FONT_FAMILY,
+    measureTextWidth,
+    resolveLabelCollisions,
+    truncateToWidth
+} from "../utils/textMeasure";
 import { getCommentBoxPosition, getLegendPosition } from "../layoutEngine";
 
 export interface TitleSettings {
@@ -34,7 +40,7 @@ export interface DataLabelSettings {
     decimalPlaces: number;
     displayUnits: NumberScale;
     negativeFormat: "minus" | "parentheses";
-    labelDensity: "all" | "firstLast" | "minMax" | "none";
+    labelDensity: "all" | "firstLast" | "minMax" | "auto" | "none";
 }
 
 export interface CategorySettings {
@@ -136,12 +142,18 @@ export interface ChartDimensions {
 
 export abstract class BaseChart {
     private static nextInstanceId = 0;
+    /** Minimum clear space between two rendered data labels, in pixels. */
+    private static readonly LABEL_MIN_GAP_PX = 4;
+    /** Multiplier converting font size to occupied line height for stacked labels. */
+    private static readonly LABEL_LINE_HEIGHT_RATIO = 1.25;
     protected container: d3.Selection<SVGGElement, unknown, null, undefined>;
     protected data: ParsedData;
     protected settings: ChartSettings;
     protected dimensions: ChartDimensions;
     protected readonly instanceId: string;
     protected readonly forecastPatternId: string;
+    /** Indices "auto" density keeps for this render; null until planAutoLabels() runs. */
+    private autoLabelPlan: Set<number> | null = null;
 
     constructor(
         container: d3.Selection<SVGGElement, unknown, null, undefined>,
@@ -345,6 +357,11 @@ export abstract class BaseChart {
         if (density === "none") return false;
         if (density === "all") return true;
         if (density === "firstLast") return i === 0 || i === total - 1;
+        if (density === "auto") {
+            // Charts seed a plan via planAutoLabels(). Without one, show everything
+            // rather than silently hiding data.
+            return this.autoLabelPlan === null || this.autoLabelPlan.has(i);
+        }
         if (density === "minMax") {
             if (values[i] === null) return false;
             let min = Number.POSITIVE_INFINITY;
@@ -359,6 +376,87 @@ export abstract class BaseChart {
             return values[i] === min || values[i] === max;
         }
         return true;
+    }
+
+    /**
+     * Indices that "auto" density never drops while they still fit: the first and last
+     * category, plus the extremes. These are the labels a reader actually scans for.
+     */
+    protected anchorLabelIndices(values: FiniteValue[]): Set<number> {
+        const anchors = new Set<number>();
+        if (values.length === 0) return anchors;
+        anchors.add(0);
+        anchors.add(values.length - 1);
+
+        let minIndex = -1;
+        let maxIndex = -1;
+        for (let i = 0; i < values.length; i++) {
+            const value = values[i];
+            if (value === null || !Number.isFinite(value)) continue;
+            if (minIndex === -1 || value < (values[minIndex] as number)) minIndex = i;
+            if (maxIndex === -1 || value > (values[maxIndex] as number)) maxIndex = i;
+        }
+        if (minIndex !== -1) anchors.add(minIndex);
+        if (maxIndex !== -1) anchors.add(maxIndex);
+        return anchors;
+    }
+
+    /**
+     * Seeds the "auto" label-density plan for this render.
+     *
+     * Pass one slot per *rendered label*. Charts that draw several labels for one
+     * category (grouped columns, grouped bars, multi-series lines, the variance
+     * chart's value + variance pair) must submit one slot each, all sharing that
+     * category's `index`. Slots sharing an index are merged into the union of their
+     * footprints, because shouldShowLabel() shows or hides a category's labels as a
+     * unit — so the space a category really needs is its whole cluster, not one label.
+     *
+     * `center` is the label's centre on the axis where labels can collide, and `axis`
+     * selects whether that extent is measured text width (labels sit side by side) or
+     * line height (labels stack vertically).
+     */
+    protected planAutoLabels(
+        slots: Array<{ index: number; center: number; text: string }>,
+        values: FiniteValue[],
+        axis: "horizontal" | "vertical" = "horizontal"
+    ): void {
+        if (this.settings.dataLabels.labelDensity !== "auto") {
+            this.autoLabelPlan = null;
+            return;
+        }
+
+        const fontSize = this.settings.dataLabels.fontSize;
+        // Measure as bold even where labels render at normal weight: bold is the widest
+        // variant any chart uses, so erring this way over-reserves space and can only
+        // thin more aggressively. Under-reserving would let labels overlap.
+        const style = { fontSize, fontFamily: DEFAULT_FONT_FAMILY, fontWeight: "bold" };
+        const lineHeight = fontSize * BaseChart.LABEL_LINE_HEIGHT_RATIO;
+
+        const bounds = new Map<number, { left: number; right: number }>();
+        for (const slot of slots) {
+            if (!slot.text || !Number.isFinite(slot.center)) continue;
+            const size = axis === "horizontal" ? measureTextWidth(slot.text, style) : lineHeight;
+            if (size <= 0) continue;
+            const left = slot.center - size / 2;
+            const right = slot.center + size / 2;
+            const existing = bounds.get(slot.index);
+            if (existing) {
+                existing.left = Math.min(existing.left, left);
+                existing.right = Math.max(existing.right, right);
+            } else {
+                bounds.set(slot.index, { left, right });
+            }
+        }
+
+        const measured = [...bounds.entries()].map(([index, extent]) => ({
+            index,
+            center: (extent.left + extent.right) / 2,
+            size: extent.right - extent.left
+        }));
+
+        this.autoLabelPlan = new Set(
+            resolveLabelCollisions(measured, BaseChart.LABEL_MIN_GAP_PX, this.anchorLabelIndices(values))
+        );
     }
 
     protected renderTitle(): void {
@@ -403,6 +501,10 @@ export abstract class BaseChart {
         axisGroup.selectAll(".domain, line").attr("stroke", this.settings.foreground);
         
         const maxW = this.settings.categories.maxWidth;
+        const labelStyle = {
+            fontSize: this.settings.categories.fontSize,
+            fontFamily: DEFAULT_FONT_FAMILY
+        };
         axisGroup.selectAll("text")
             .attr("transform", `rotate(${this.settings.categories.rotation})`)
             .style(
@@ -414,20 +516,11 @@ export abstract class BaseChart {
             .style("font-size", `${this.settings.categories.fontSize}px`)
             .style("fill", this.settings.categories.fontColor)
             .each(function() {
+                if (maxW <= 0) return;
                 const self = d3.select(this);
-                const fullText = self.text();
-                if (maxW > 0) {
-                    // Truncate to fit within maxWidth pixels
-                    const node = self.node() as SVGTextElement;
-                    self.text(fullText);
-                    if (node.getComputedTextLength() > maxW) {
-                        let truncated = fullText;
-                        while (truncated.length > 1 && node.getComputedTextLength() > maxW) {
-                            truncated = truncated.slice(0, -1);
-                            self.text(truncated + "…");
-                        }
-                    }
-                }
+                // Measured off-DOM: no per-character getComputedTextLength() reflow.
+                const truncated = truncateToWidth(self.text(), maxW, labelStyle);
+                if (truncated !== self.text()) self.text(truncated);
             });
     }
 

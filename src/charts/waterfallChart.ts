@@ -61,6 +61,18 @@ export class WaterfallChart extends BaseChart {
         const showLabels = this.settings.dataLabels?.show ?? this.settings.showVarianceLabels;
         const fontSize = this.settings.dataLabels?.fontSize ?? this.settings.fontSize;
         const values = waterfallData.map(item => item.value);
+
+        this.planAutoLabels(
+            waterfallData.map((item, position) => ({
+                index: position,
+                center: (xScale(item.key) ?? 0) + xScale.bandwidth() / 2,
+                text: item.isTotal
+                    ? (this.settings.dataLabels.showValues ? this.formatValue(item.value) : "")
+                    : this.formatVarianceValues(item.displayVariance, item.variancePct)
+            })),
+            values
+        );
+
         waterfallData.forEach((item, position) => {
             const xPos = xScale(item.key) ?? 0;
             const top = item.isTotal ? Math.max(0, item.end) : Math.max(item.start, item.end);

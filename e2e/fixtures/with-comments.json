@@ -1,0 +1,164 @@
+{
+  "metadata": {
+    "columns": [
+      {
+        "displayName": "Month",
+        "queryName": "Table.Month",
+        "type": {
+          "text": true
+        },
+        "roles": {
+          "category": true
+        }
+      },
+      {
+        "displayName": "Comment",
+        "queryName": "Table.Comment",
+        "type": {
+          "text": true
+        },
+        "roles": {
+          "comments": true
+        }
+      },
+      {
+        "displayName": "Actual",
+        "queryName": "Sum(Actual)",
+        "type": {
+          "numeric": true
+        },
+        "format": "$#,0",
+        "roles": {
+          "actual": true
+        },
+        "isMeasure": true
+      },
+      {
+        "displayName": "Budget",
+        "queryName": "Sum(Budget)",
+        "type": {
+          "numeric": true
+        },
+        "format": "$#,0",
+        "roles": {
+          "budget": true
+        },
+        "isMeasure": true
+      }
+    ]
+  },
+  "categorical": {
+    "categories": [
+      {
+        "source": {
+          "displayName": "Month",
+          "queryName": "Table.Month",
+          "type": {
+            "text": true
+          },
+          "roles": {
+            "category": true
+          }
+        },
+        "values": [
+          "Jan",
+          "Feb",
+          "Mar",
+          "Apr",
+          "May",
+          "Jun",
+          "Jul",
+          "Aug",
+          "Sep",
+          "Oct",
+          "Nov",
+          "Dec"
+        ]
+      },
+      {
+        "source": {
+          "displayName": "Comment",
+          "queryName": "Table.Comment",
+          "type": {
+            "text": true
+          },
+          "roles": {
+            "comments": true
+          }
+        },
+        "values": [
+          "Strong start driven by enterprise renewals",
+          "Seasonal dip as expected",
+          "New product launch boosted mid-market",
+          "Churn in SMB segment",
+          "Marketing campaign outperformed",
+          "Summer slowdown",
+          "APAC expansion kicked in",
+          "Record quarter close",
+          "Holiday prep ramp",
+          "Supply constraint resolved",
+          "Black Friday uplift",
+          "End-of-year push exceeded plan"
+        ]
+      }
+    ],
+    "values": [
+      {
+        "source": {
+          "displayName": "Actual",
+          "queryName": "Sum(Actual)",
+          "type": {
+            "numeric": true
+          },
+          "format": "$#,0",
+          "roles": {
+            "actual": true
+          },
+          "isMeasure": true
+        },
+        "values": [
+          820,
+          910,
+          1050,
+          980,
+          1120,
+          1280,
+          1340,
+          1410,
+          1290,
+          1360,
+          1480,
+          1620
+        ]
+      },
+      {
+        "source": {
+          "displayName": "Budget",
+          "queryName": "Sum(Budget)",
+          "type": {
+            "numeric": true
+          },
+          "format": "$#,0",
+          "roles": {
+            "budget": true
+          },
+          "isMeasure": true
+        },
+        "values": [
+          800,
+          900,
+          1000,
+          1000,
+          1100,
+          1200,
+          1300,
+          1400,
+          1300,
+          1400,
+          1500,
+          1600
+        ]
+      }
+    ]
+  }
+}

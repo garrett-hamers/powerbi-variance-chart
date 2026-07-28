@@ -66,6 +66,22 @@ export class BarChart extends BaseChart {
         const actualValues = dataPoints.map(point => point.actual);
         const baseline = xScale(0);
 
+        // Horizontal bars stack their labels down the category axis, so labels collide
+        // vertically: the extent is line height. Each series gets its own row inside the
+        // band, so submit one slot per series to reserve the full stack.
+        this.planAutoLabels(
+            dataPoints.flatMap((point, pointPosition) => {
+                const yPos = yScale(this.pointKey(point, pointPosition)) ?? 0;
+                return series.map((item, seriesPosition) => ({
+                    index: pointPosition,
+                    center: yPos + seriesPosition * barHeight + barHeight / 2,
+                    text: point[item.key] === null ? "" : this.formatValue(point[item.key], item.key)
+                }));
+            }),
+            actualValues,
+            "vertical"
+        );
+
         dataPoints.forEach((point, pointPosition) => {
             const yPos = yScale(this.pointKey(point, pointPosition)) ?? 0;
             series.forEach((item, seriesPosition) => {

@@ -62,6 +62,18 @@ export class LollipopChart extends BaseChart {
 
         const showLabels = this.settings.dataLabels?.show ?? this.settings.showVarianceLabels;
         const labelFontSize = this.settings.dataLabels?.fontSize ?? this.settings.fontSize;
+
+        // Horizontal lollipops: labels collide vertically down the category axis.
+        this.planAutoLabels(
+            dataPoints.map((point, position) => ({
+                index: position,
+                center: (yScale(this.pointKey(point, position)) ?? 0) + yScale.bandwidth() / 2,
+                text: this.formatVarianceLabel(point)
+            })),
+            variances,
+            "vertical"
+        );
+
         dataPoints.forEach((point, position) => {
             const variance = this.getVarianceForPoint(point);
             if (variance === null) return;

@@ -75,6 +75,20 @@ export class ColumnChart extends BaseChart {
         const allValues = dataPoints.map(point => point.actual);
         const baseline = yScale(0);
 
+        // One slot per drawn label: grouped columns label every series at its own
+        // offset inside the band, so the category's real footprint spans them all.
+        this.planAutoLabels(
+            dataPoints.flatMap((point, pointPosition) => {
+                const xPos = xScale(this.pointKey(point, pointPosition)) ?? 0;
+                return series.map((item, seriesPosition) => ({
+                    index: pointPosition,
+                    center: xPos + seriesPosition * barWidth + Math.max(0, barWidth - 2) / 2,
+                    text: point[item.key] === null ? "" : this.formatValue(point[item.key], item.key)
+                }));
+            }),
+            allValues
+        );
+
         dataPoints.forEach((point, pointPosition) => {
             const xPos = xScale(this.pointKey(point, pointPosition)) ?? 0;
             series.forEach((item, seriesPosition) => {
@@ -119,6 +133,19 @@ export class ColumnChart extends BaseChart {
             && this.settings.dataLabels.showValues;
         const fontSize = this.settings.dataLabels?.fontSize ?? this.settings.fontSize;
         const allValues = dataPoints.map(point => point.actual);
+
+        // Stacked columns carry a single total label per category.
+        this.planAutoLabels(
+            dataPoints.map((point, pointPosition) => {
+                const total = series.reduce((sum, item) => sum + (point[item.key] ?? 0), 0);
+                return {
+                    index: pointPosition,
+                    center: (xScale(this.pointKey(point, pointPosition)) ?? 0) + barWidth / 2,
+                    text: this.formatValue(total)
+                };
+            }),
+            allValues
+        );
 
         dataPoints.forEach((point, pointPosition) => {
             const xPos = xScale(this.pointKey(point, pointPosition)) ?? 0;
