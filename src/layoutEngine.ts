@@ -143,10 +143,13 @@ export function calculateLayout(rawWidth: number, rawHeight: number, config: Lay
     const width = finiteNonnegative(rawWidth);
     const height = finiteNonnegative(rawHeight);
     if (config.breakpoint === "small") {
+        const horizontalCategoryMargin = config.chartType === "bar" || config.chartType === "lollipop"
+            ? Math.max(35, finiteNonnegative(config.categories.maxWidth) + 12)
+            : 35;
         return {
             width,
             height,
-            margin: fitMargins(width, height, { top: 5, right: 15, bottom: 25, left: 35 }),
+            margin: fitMargins(width, height, { top: 5, right: 15, bottom: 25, left: horizontalCategoryMargin }),
             layout: { chartArea: { x: 0, y: 0, width, height } }
         };
     }
@@ -171,7 +174,9 @@ export function calculateLayout(rawWidth: number, rawHeight: number, config: Lay
         axes.bottom = Math.min(axisBottom, 60);
         axes.left = 50;
     }
-    if (config.chartType === "lollipop") axes.left = 100;
+    if (config.chartType === "bar" || config.chartType === "lollipop") {
+        axes.left = Math.max(axes.left, finiteNonnegative(config.categories.maxWidth) + 12);
+    }
 
     const margins = fitMargins(width, height, {
         top: available.y + axes.top,

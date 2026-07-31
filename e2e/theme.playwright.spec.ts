@@ -7,9 +7,8 @@
  * - Exercises a theme-switch sequence and asserts the visual container never
  *   becomes empty between transitions (no render flicker).
  *
- * The harness does not propagate the MockHost palette into the Visual's
- * render pipeline, so dark/HC assertions are reported as findings for triage
- * rather than hard failures. See files/matrices/theme-tests-report.md.
+ * These tests mount the production Visual class with the Power BI-shaped mock host,
+ * so palette transitions exercise the same update path used by the report host.
  */
 import { test, expect } from "@playwright/test";
 import * as path from "path";
@@ -40,13 +39,25 @@ async function applyTheme(page: any, palette: Record<string, string>, isHC: bool
             a, a:visited { color: ${palette.hyperlink} !important; }
             blockquote { border-left-color: ${palette.foreground} !important; }
         `;
-        const host = (window as any).__host;
+        const host = (window as any).__themeHost;
         if (host && typeof host.setTheme === "function") {
             try { host.setTheme(palette, isHC); } catch (_e) { /* ignore */ }
         }
-        const mv = (window as any).__mountVisual;
-        if (mv && typeof mv.update === "function") {
-            try { mv.update({ host }); } catch (_e) { /* ignore */ }
+        const visual = (window as any).__themeVisual;
+        const dataView = (window as any).__defaultDataView;
+        if (visual && dataView && typeof visual.update === "function") {
+            try {
+                visual.update({
+                    dataViews: [dataView],
+                    viewport: { width: 640, height: 360 },
+                    type: 2,
+                    viewMode: 0,
+                    editMode: 0,
+                    isInFocus: false,
+                    operationKind: 0,
+                    jsonFilters: []
+                });
+            } catch (_e) { /* ignore */ }
         }
     }, { palette, isHC });
     await page.waitForTimeout(120);
@@ -135,6 +146,15 @@ test.describe(`${VISUAL_NAME} — theme rendering (light/dark/HC)`, () => {
     test.beforeEach(async ({ page }) => {
         await page.goto(PREVIEW_URL, { waitUntil: "networkidle" });
         await page.waitForSelector("[data-rendered='true']", { timeout: 10000 });
+        await page.evaluate(() => {
+            const mountWithHost = (window as any).__mountWithHost;
+            const dataView = (window as any).__defaultDataView;
+            if (typeof mountWithHost === "function" && dataView) {
+                mountWithHost("variance", dataView, { width: 640, height: 360 });
+                (window as any).__themeHost = (window as any).__mockHosts?.variance;
+                (window as any).__themeVisual = (window as any).__mockVisuals?.variance;
+            }
+        });
     });
 
     test("light theme: renders with >= 4.5 contrast on a readable text element", async ({ page }) => {
@@ -156,10 +176,7 @@ test.describe(`${VISUAL_NAME} — theme rendering (light/dark/HC)`, () => {
         const outDir = path.resolve(__dirname, "screenshots");
         fs.writeFileSync(path.join(outDir, `${VISUAL_NAME}-theme-dark.json`), JSON.stringify({ theme: "dark", best }, null, 2));
         expect(best).not.toBeNull();
-        // Soft-expect: contrast after dark theme. Visual may not react; reported for triage.
-        if (best!.ratio < 4.5) {
-            console.warn(`[${VISUAL_NAME} dark] contrast ${best!.ratio} below 4.5 — visual does not respect dark theme palette`);
-        }
+        expect(best!.ratio).toBeGreaterThanOrEqual(4.5);
     });
 
     test("high-contrast theme: palette-only audit", async ({ page }) => {
@@ -183,8 +200,7 @@ test.describe(`${VISUAL_NAME} — theme rendering (light/dark/HC)`, () => {
             offenders,
             allColors: colors
         }, null, 2));
-        // Reported for triage. See theme-tests-report.md.
-        expect(Array.isArray(offenders)).toBe(true);
+        expect(offenders).toEqual([]);
     });
 
     test("theme switch sequence: light -> dark -> HC -> light, container never empty", async ({ page }) => {

@@ -11,7 +11,7 @@
  * exits 0 and reports zero critical/high/moderate advisories.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -118,5 +118,36 @@ describe("certification gate", () => {
         ) as { privileges: unknown[] };
         expect(Array.isArray(capabilities.privileges)).toBe(true);
         expect(capabilities.privileges).toHaveLength(0);
+    });
+
+    it("keeps advertised host surfaces and localized resources wired", () => {
+        const capabilities = JSON.parse(
+            readFileSync(join(process.cwd(), "capabilities.json"), "utf8")
+        ) as {
+            supportsHighlight: boolean;
+            supportsOnObjectFormatting: boolean;
+            enablePointerEventsFormatMode: boolean;
+            sorting?: { default?: Record<string, never> };
+            tooltips?: { supportEnhancedTooltips?: boolean };
+        };
+        const pbiviz = JSON.parse(
+            readFileSync(join(process.cwd(), "pbiviz.json"), "utf8")
+        ) as { stringResources?: string[] };
+
+        expect(capabilities.supportsHighlight).toBe(true);
+        expect(capabilities.supportsOnObjectFormatting).toBe(true);
+        expect(capabilities.enablePointerEventsFormatMode).toBe(true);
+        expect(capabilities.sorting?.default).toEqual({});
+        expect(capabilities.tooltips?.supportEnhancedTooltips).toBe(true);
+
+        expect(pbiviz.stringResources).toEqual([
+            "stringResources/en-US/resources.resjson",
+            "stringResources/de-DE/resources.resjson",
+            "stringResources/fr-FR/resources.resjson",
+            "stringResources/ja-JP/resources.resjson"
+        ]);
+        for (const resource of pbiviz.stringResources) {
+            expect(existsSync(join(process.cwd(), resource))).toBe(true);
+        }
     });
 });

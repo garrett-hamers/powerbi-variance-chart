@@ -1,10 +1,11 @@
 {
-    "supportsHighlight": false,
+    "supportsHighlight": true,
     "supportsKeyboardFocus": true,
     "supportsLandingPage": true,
     "supportsEmptyDataView": true,
     "supportsMultiVisualSelection": true,
-    "supportsSynchronizingFilterState": true,
+    "supportsOnObjectFormatting": true,
+    "enablePointerEventsFormatMode": true,
     "drilldown": {
         "roles": ["category"]
     },
@@ -13,53 +14,65 @@
             "default": true,
             "canvas": true
         },
+        "supportEnhancedTooltips": true,
         "roles": ["tooltips"]
+    },
+    "sorting": {
+        "default": {}
     },
     "dataRoles": [
         {
             "displayName": "Category",
+            "displayNameKey": "Role_Category",
             "name": "category",
             "kind": "Grouping",
             "description": "The category axis (e.g., Month, Department, Product)"
         },
         {
             "displayName": "Group",
+            "displayNameKey": "Role_Group",
             "name": "group",
             "kind": "Grouping",
             "description": "Group for small multiples view"
         },
         {
             "displayName": "Values",
+            "displayNameKey": "Role_Actual",
             "name": "actual",
             "kind": "Measure",
             "description": "Actual values (e.g., actual sales, actual costs)"
         },
         {
             "displayName": "Previous Year",
+            "displayNameKey": "Role_PreviousYear",
             "name": "previousYear",
             "kind": "Measure",
             "description": "Previous year values for YoY comparison"
         },
         {
             "displayName": "Plan",
+            "displayNameKey": "Role_Plan",
             "name": "budget",
             "kind": "Measure",
             "description": "Plan or budget values for comparison"
         },
         {
             "displayName": "Forecast",
+            "displayNameKey": "Role_Forecast",
             "name": "forecast",
             "kind": "Measure",
             "description": "Forecast values for comparison"
         },
         {
             "displayName": "Tooltips",
+            "displayNameKey": "Role_Tooltips",
             "name": "tooltips",
             "kind": "Measure",
             "description": "Additional measures to show in tooltips"
         },
         {
             "displayName": "Comments",
+            "displayNameKey": "Role_Comments",
             "name": "comments",
             "kind": "Grouping",
             "description": "Text field for annotations and comments"
@@ -81,7 +94,7 @@
                             { "value": "variance", "displayName": "Variance Chart" },
                             { "value": "waterfall", "displayName": "Waterfall Chart" },
                             { "value": "column", "displayName": "Column Chart" },
-                            { "value": "columnStacked", "displayName": "Stacked Column" },
+                            { "value": "columnStacked", "displayName": "Stacked Column (additive)" },
                             { "value": "bar", "displayName": "Bar Chart" },
                             { "value": "line", "displayName": "Line Chart" },
                             { "value": "area", "displayName": "Area Chart" },
@@ -319,6 +332,31 @@
                 },
                 "breakValue": {
                     "type": { "numeric": true }
+                }
+            }
+        },
+        "referenceLine": {
+            "properties": {
+                "show": {
+                    "type": { "bool": true }
+                },
+                "displayName": {
+                    "type": { "text": true }
+                },
+                "value": {
+                    "type": { "numeric": true }
+                },
+                "color": {
+                    "type": { "fill": { "solid": { "color": true } } }
+                },
+                "style": {
+                    "type": {
+                        "enumeration": [
+                            { "value": "solid", "displayName": "Solid" },
+                            { "value": "dashed", "displayName": "Dashed" },
+                            { "value": "dotted", "displayName": "Dotted" }
+                        ]
+                    }
                 }
             }
         },

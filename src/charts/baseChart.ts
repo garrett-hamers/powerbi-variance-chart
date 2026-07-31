@@ -69,6 +69,18 @@ export interface CommentBoxSettings {
     markerColor: string;
 }
 
+export interface ChartLabels {
+    actual: string;
+    plan: string;
+    previousYear: string;
+    forecast: string;
+    positiveVariance: string;
+    negativeVariance: string;
+    varianceTo: string;
+    comments: string;
+    noComparison: string;
+}
+
 export interface DifferenceHighlightSettings {
     show: boolean;
     threshold: number;
@@ -103,12 +115,15 @@ export interface ChartSettings {
 
     // Comment Box
     commentBox: CommentBoxSettings;
+    labels?: ChartLabels;
     
     // Difference highlighting
     highlighting: DifferenceHighlightSettings;
 
     // Axis break
     axisBreak: { show: boolean; breakValue: number };
+    // Analytics-pane reference line
+    referenceLine?: { show: boolean; label: string; value: number; color: string; style: "solid" | "dashed" | "dotted" };
     
     // Legacy compatibility
     showVarianceLabels: boolean;
@@ -188,12 +203,31 @@ export abstract class BaseChart {
         if (key === null) return null;
         switch (key) {
             case "previousYear":
-                return { key, color: this.settings.colors.previousYear, label: "Previous Year" };
+                return {
+                    key,
+                    color: this.settings.colors.previousYear,
+                    label: this.settings.labels?.previousYear ?? "Previous Year"
+                };
             case "forecast":
-                return { key, color: this.settings.colors.forecast, label: "Forecast" };
+                return {
+                    key,
+                    color: this.settings.colors.forecast,
+                    label: this.settings.labels?.forecast ?? "Forecast"
+                };
             default:
-                return { key, color: this.settings.colors.budget, label: "Plan" };
+                return {
+                    key,
+                    color: this.settings.colors.budget,
+                    label: this.settings.labels?.plan ?? "Plan"
+                };
         }
+    }
+
+    protected getChartLabel(
+        key: keyof Omit<ChartLabels, "noComparison">,
+        fallback: string
+    ): string {
+        return this.settings.labels?.[key] ?? fallback;
     }
 
     protected getVarianceForPoint(d: DataPoint): FiniteValue {
@@ -283,10 +317,18 @@ export abstract class BaseChart {
     }
 
     protected formatVarianceLabel(d: DataPoint): string {
-        return this.formatVarianceValues(
-            this.getVarianceForPoint(d),
-            this.getVariancePctForPoint(d)
-        );
+        const variance = this.getVarianceForPoint(d);
+        const percentage = this.getVariancePctForPoint(d);
+        const formatted = this.formatVarianceValues(variance, percentage);
+        if (
+            this.settings.dataLabels.showPercentage
+            && variance !== null
+            && percentage === null
+            && this.getComparisonForPoint(d) !== null
+        ) {
+            return formatted ? `${formatted} (N/A)` : "N/A";
+        }
+        return formatted;
     }
 
     protected finiteValues(values: FiniteValue[]): number[] {
@@ -544,6 +586,43 @@ export abstract class BaseChart {
         if (this.settings.axisBreak?.show && Number.isFinite(this.settings.axisBreak.breakValue)) {
             this.renderAxisBreak(yScale, this.settings.axisBreak.breakValue);
         }
+        this.renderReferenceLine(yScale);
+    }
+
+    protected renderCategoryYAxis(
+        yScale: d3.ScaleBand<string>,
+        labels: Map<string, string>
+    ): void {
+        if (!this.settings.categories.show) return;
+
+        const axisGroup = this.container.append("g")
+            .attr("class", "y-axis")
+            .call(
+                d3.axisLeft(yScale)
+                    .tickFormat(key => labels.get(String(key)) ?? String(key))
+            );
+        axisGroup.selectAll(".domain, line").attr("stroke", this.settings.foreground);
+
+        const maxWidth = this.settings.categories.maxWidth;
+        const labelStyle = {
+            fontSize: this.settings.categories.fontSize,
+            fontFamily: DEFAULT_FONT_FAMILY
+        };
+        axisGroup.selectAll("text")
+            .style("font-size", `${this.settings.categories.fontSize}px`)
+            .style("fill", this.settings.categories.fontColor)
+            .each(function() {
+                const text = d3.select(this);
+                const fullLabel = text.text();
+                const visibleLabel = maxWidth > 0
+                    ? truncateToWidth(fullLabel, maxWidth, labelStyle)
+                    : fullLabel;
+                text
+                    .text(visibleLabel)
+                    .attr("aria-label", fullLabel)
+                    .attr("data-full-label", fullLabel)
+                    .attr("title", fullLabel);
+            });
     }
 
     protected renderLegend(items: Array<{ label: string; color: string; outlined?: boolean }>): void {
@@ -776,30 +855,121 @@ export abstract class BaseChart {
             const barY = yScale(dp.actual);
             const baseY = yScale(0);
             const cy = Math.max(barY, baseY) + markerSize / 2 + 4;
-
-            this.container.append("circle")
-                .attr("cx", cx)
-                .attr("cy", cy)
-                .attr("r", markerSize / 2)
-                .attr("fill", "none")
-                .attr("stroke", markerColor)
-                .attr("stroke-width", 1.5)
-                .attr("class", "comment-marker")
-                .attr("data-comment-index", index)
-                .attr("data-comment-source", dp.sourceIndices.join(","));
-
-            this.container.append("text")
-                .attr("x", cx)
-                .attr("y", cy + fontSize * 0.35)
-                .attr("text-anchor", "middle")
-                .attr("fill", markerColor)
-                .attr("font-size", `${fontSize}px`)
-                .attr("font-weight", "bold")
-                .attr("class", "comment-marker-text")
-                .attr("data-comment-index", index)
-                .attr("data-comment-source", dp.sourceIndices.join(","))
-                .text(String(num));
+            this.renderCommentMarker(index, num, cx, cy, markerSize, markerColor, fontSize, dp.sourceIndices);
         });
+    }
+
+    protected renderHorizontalCommentMarkers(
+        xScale: d3.ScaleLinear<number, number>,
+        yScale: d3.ScaleBand<string>,
+        valueForPoint: (point: DataPoint) => FiniteValue = point => point.actual
+    ): void {
+        const { commentBox } = this.settings;
+        if (!commentBox.show) return;
+
+        const comments = this.data.dataPoints
+            .map((dp, index) => ({ dp, index }))
+            .filter(({ dp }) => dp.comment && dp.comment.trim() !== "");
+        const markerSize = commentBox.markerSize || 18;
+        const markerColor = commentBox.markerColor || this.settings.foreground;
+        const fontSize = commentBox.fontSize;
+
+        comments.forEach(({ dp, index }, commentNum) => {
+            const value = valueForPoint(dp);
+            if (value === null) return;
+            const y = (yScale(this.pointKey(dp, index)) ?? 0) + yScale.bandwidth() / 2;
+            const endpoint = xScale(value);
+            if (!Number.isFinite(endpoint)) return;
+            const direction = value >= 0 ? 1 : -1;
+            const cx = Math.max(
+                markerSize / 2,
+                Math.min(this.chartWidth - markerSize / 2, endpoint + direction * (markerSize / 2 + 4))
+            );
+            this.renderCommentMarker(
+                index,
+                commentNum + 1,
+                cx,
+                y,
+                markerSize,
+                markerColor,
+                fontSize,
+                dp.sourceIndices
+            );
+        });
+    }
+
+    protected renderWaterfallCommentMarkers(
+        xScale: d3.ScaleBand<string>,
+        yScale: d3.ScaleLinear<number, number>
+    ): void {
+        const { commentBox } = this.settings;
+        if (!commentBox.show) return;
+
+        const comments = this.data.dataPoints
+            .map((dp, index) => ({ dp, index }))
+            .filter(({ dp }) => dp.comment && dp.comment.trim() !== "");
+        const markerSize = commentBox.markerSize || 18;
+        const markerColor = commentBox.markerColor || this.settings.foreground;
+        const fontSize = commentBox.fontSize;
+
+        comments.forEach(({ dp, index }, commentNum) => {
+            if (dp.actual === null) return;
+            const key = dp.comment.startsWith("=")
+                ? `subtotal-${dp.index ?? index}`
+                : `step-${dp.index ?? index}`;
+            const x = xScale(key);
+            const y = yScale(dp.actual);
+            if (x === undefined || !Number.isFinite(y)) return;
+            const cx = x + xScale.bandwidth() / 2;
+            const cy = Math.max(
+                markerSize / 2,
+                Math.min(this.chartHeight - markerSize / 2, y - markerSize / 2 - 4)
+            );
+            this.renderCommentMarker(
+                index,
+                commentNum + 1,
+                cx,
+                cy,
+                markerSize,
+                markerColor,
+                fontSize,
+                dp.sourceIndices
+            );
+        });
+    }
+
+    private renderCommentMarker(
+        index: number,
+        number: number,
+        cx: number,
+        cy: number,
+        markerSize: number,
+        markerColor: string,
+        fontSize: number,
+        sourceIndices: number[]
+    ): void {
+        this.container.append("circle")
+            .attr("cx", cx)
+            .attr("cy", cy)
+            .attr("r", markerSize / 2)
+            .attr("fill", "none")
+            .attr("stroke", markerColor)
+            .attr("stroke-width", 1.5)
+            .attr("class", "comment-marker")
+            .attr("data-comment-index", index)
+            .attr("data-comment-source", sourceIndices.join(","));
+
+        this.container.append("text")
+            .attr("x", cx)
+            .attr("y", cy + fontSize * 0.35)
+            .attr("text-anchor", "middle")
+            .attr("fill", markerColor)
+            .attr("font-size", `${fontSize}px`)
+            .attr("font-weight", "bold")
+            .attr("class", "comment-marker-text")
+            .attr("data-comment-index", index)
+            .attr("data-comment-source", sourceIndices.join(","))
+            .text(String(number));
     }
 
     protected renderAxisBreak(yScale: d3.ScaleLinear<number, number>, breakValue: number): void {
@@ -836,6 +1006,48 @@ export abstract class BaseChart {
             .attr("fill", "none")
             .append("title")
             .text("Axis break marker; scale remains continuous");
+    }
+
+    protected renderReferenceLine(yScale: d3.ScaleLinear<number, number>): void {
+        const reference = this.settings.referenceLine;
+        if (!reference?.show || !Number.isFinite(reference.value)) return;
+        const y = yScale(reference.value);
+        if (!Number.isFinite(y) || y < 0 || y > this.chartHeight) return;
+        this.container.append("line")
+            .attr("class", "reference-line")
+            .attr("x1", 0)
+            .attr("x2", this.chartWidth)
+            .attr("y1", y)
+            .attr("y2", y)
+            .attr("stroke", reference.color)
+            .attr("stroke-width", 1.5)
+            .attr("stroke-dasharray", reference.style === "dashed"
+                ? "6,3"
+                : reference.style === "dotted" ? "2,2" : null)
+            .append("title")
+            .text(`${reference.label}: ${this.formatValue(reference.value)}`);
+    }
+
+    protected renderHorizontalReferenceLine(
+        xScale: d3.ScaleLinear<number, number>
+    ): void {
+        const reference = this.settings.referenceLine;
+        if (!reference?.show || !Number.isFinite(reference.value)) return;
+        const x = xScale(reference.value);
+        if (!Number.isFinite(x) || x < 0 || x > this.chartWidth) return;
+        this.container.append("line")
+            .attr("class", "reference-line")
+            .attr("x1", x)
+            .attr("x2", x)
+            .attr("y1", 0)
+            .attr("y2", this.chartHeight)
+            .attr("stroke", reference.color)
+            .attr("stroke-width", 1.5)
+            .attr("stroke-dasharray", reference.style === "dashed"
+                ? "6,3"
+                : reference.style === "dotted" ? "2,2" : null)
+            .append("title")
+            .text(`${reference.label}: ${this.formatValue(reference.value)}`);
     }
 
     protected createPatternDefs(): void {

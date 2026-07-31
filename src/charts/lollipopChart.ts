@@ -36,12 +36,9 @@ export class LollipopChart extends BaseChart {
         if (this.settings.axisBreak.show) {
             this.renderHorizontalAxisBreak(xScale, this.settings.axisBreak.breakValue);
         }
+        this.renderHorizontalReferenceLine(xScale);
         if (this.settings.categories.show) {
-            const yAxis = this.container.append("g")
-                .attr("class", "y-axis")
-                .call(d3.axisLeft(yScale).tickFormat(key => this.categoryLabels().get(String(key)) ?? String(key)));
-            yAxis.selectAll(".domain, line").attr("stroke", this.settings.foreground);
-            yAxis.selectAll("text").style("font-size", `${fontSize}px`).style("fill", fontColor);
+            this.renderCategoryYAxis(yScale, this.categoryLabels());
         }
         this.container.append("line")
             .attr("x1", xScale(0)).attr("x2", xScale(0))
@@ -55,7 +52,7 @@ export class LollipopChart extends BaseChart {
                 .attr("y", this.chartHeight / 2)
                 .attr("text-anchor", "middle")
                 .attr("fill", fontColor)
-                .text("No comparison available");
+                .text(this.settings.labels?.noComparison ?? "No comparison available");
             this.renderCommentBox();
             return;
         }
@@ -105,9 +102,10 @@ export class LollipopChart extends BaseChart {
             }
         });
 
+        this.renderHorizontalCommentMarkers(xScale, yScale, point => this.getVarianceForPoint(point));
         this.renderLegend([
-            { label: "+Variance", color: this.settings.colors.positiveVariance },
-            { label: "−Variance", color: this.settings.colors.negativeVariance }
+            { label: this.getChartLabel("positiveVariance", "+Variance"), color: this.settings.colors.positiveVariance },
+            { label: this.getChartLabel("negativeVariance", "−Variance"), color: this.settings.colors.negativeVariance }
         ]);
         this.renderCommentBox();
     }

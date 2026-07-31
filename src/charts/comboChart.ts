@@ -36,9 +36,30 @@ export class ComboChart extends BaseChart {
         this.renderTitle();
 
         const lineSeries: LineSeries[] = [];
-        if (this.data.hasBudget) lineSeries.push({ key: "budget", color: this.settings.colors.budget, label: "Plan", dashed: true });
-        if (this.data.hasPreviousYear) lineSeries.push({ key: "previousYear", color: this.settings.colors.previousYear, label: "Previous Year", dashed: false });
-        if (this.data.hasForecast) lineSeries.push({ key: "forecast", color: this.settings.colors.forecast, label: "Forecast", dashed: true });
+        if (this.data.hasBudget) {
+            lineSeries.push({
+                key: "budget",
+                color: this.settings.colors.budget,
+                label: this.getChartLabel("plan", "Plan"),
+                dashed: true
+            });
+        }
+        if (this.data.hasPreviousYear) {
+            lineSeries.push({
+                key: "previousYear",
+                color: this.settings.colors.previousYear,
+                label: this.getChartLabel("previousYear", "Previous Year"),
+                dashed: false
+            });
+        }
+        if (this.data.hasForecast) {
+            lineSeries.push({
+                key: "forecast",
+                color: this.settings.colors.forecast,
+                label: this.getChartLabel("forecast", "Forecast"),
+                dashed: true
+            });
+        }
 
         const xScale = d3.scaleBand<string>()
             .domain(this.categoryKeys())
@@ -131,7 +152,7 @@ export class ComboChart extends BaseChart {
 
         this.renderCommentMarkers(xScale, yScale);
         this.renderLegend([
-            { label: "Actual", color: this.settings.colors.actual },
+            { label: this.getChartLabel("actual", "Actual"), color: this.settings.colors.actual },
             ...lineSeries.map(item => ({ label: item.label, color: item.color }))
         ]);
         this.renderCommentBox();

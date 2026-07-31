@@ -963,6 +963,22 @@ describe("Visual host integration", () => {
         expect(highContrastElement.querySelector('[data-source-indices="0"][fill="#101010"]')).not.toBeNull();
     });
 
+    it("dims non-highlighted rows when Power BI supplies active highlights", () => {
+        const view = dataView({
+            categories: ["A", "B"],
+            actual: [10, 20],
+            budget: [8, 18],
+            highlights: {
+                actual: [10, null],
+                budget: [8, null]
+            }
+        });
+        visual.update(updateOptions(view));
+        expect(element.querySelectorAll('[data-source-indices="0"].host-highlighted').length).toBeGreaterThan(0);
+        expect(element.querySelectorAll('[data-source-indices="1"].host-highlight-dimmed').length).toBeGreaterThan(0);
+        expect(element.querySelector('[data-source-indices="1"]')?.style.opacity).toBe("0.3");
+    });
+
     it("forces high-contrast foreground/background through comment descendants", () => {
         const highContrastElement = document.createElement("div");
         const highContrastHost = createHostHarness({ highContrast: true });

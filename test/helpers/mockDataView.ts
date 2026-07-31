@@ -10,6 +10,12 @@ export interface MockDataInput {
     budget?: unknown[];
     previousYear?: unknown[];
     forecast?: unknown[];
+    highlights?: {
+        actual?: unknown[];
+        budget?: unknown[];
+        previousYear?: unknown[];
+        forecast?: unknown[];
+    };
     formats?: {
         category?: string;
         group?: string;
@@ -79,7 +85,8 @@ export function buildMockDataView(input: MockDataInput): any {
             roles: { actual: true },
             format: input.formats?.actual
         },
-        values: input.actual
+        values: input.actual,
+        highlights: input.highlights?.actual
     });
 
     if (input.budget) {
@@ -90,7 +97,8 @@ export function buildMockDataView(input: MockDataInput): any {
                 roles: { budget: true },
                 format: input.formats?.budget
             },
-            values: input.budget
+            values: input.budget,
+            highlights: input.highlights?.budget
         });
     }
 
@@ -102,7 +110,8 @@ export function buildMockDataView(input: MockDataInput): any {
                 roles: { previousYear: true },
                 format: input.formats?.previousYear
             },
-            values: input.previousYear
+            values: input.previousYear,
+            highlights: input.highlights?.previousYear
         });
     }
 
@@ -114,7 +123,8 @@ export function buildMockDataView(input: MockDataInput): any {
                 roles: { forecast: true },
                 format: input.formats?.forecast
             },
-            values: input.forecast
+            values: input.forecast,
+            highlights: input.highlights?.forecast
         });
     }
 

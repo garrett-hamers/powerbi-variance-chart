@@ -36,10 +36,34 @@ export class LineChart extends BaseChart {
         this.container.attr("transform", `translate(${this.dimensions.margin.left},${this.dimensions.margin.top})`);
         this.renderTitle();
 
-        const series: Series[] = [{ key: "actual", color: this.settings.colors.actual, label: "Actual" }];
-        if (this.data.hasBudget) series.push({ key: "budget", color: this.settings.colors.budget, label: "Plan", dashed: true });
-        if (this.data.hasPreviousYear) series.push({ key: "previousYear", color: this.settings.colors.previousYear, label: "Previous Year" });
-        if (this.data.hasForecast) series.push({ key: "forecast", color: this.settings.colors.forecast, label: "Forecast", dashed: true });
+        const series: Series[] = [{
+            key: "actual",
+            color: this.settings.colors.actual,
+            label: this.getChartLabel("actual", "Actual")
+        }];
+        if (this.data.hasBudget) {
+            series.push({
+                key: "budget",
+                color: this.settings.colors.budget,
+                label: this.getChartLabel("plan", "Plan"),
+                dashed: true
+            });
+        }
+        if (this.data.hasPreviousYear) {
+            series.push({
+                key: "previousYear",
+                color: this.settings.colors.previousYear,
+                label: this.getChartLabel("previousYear", "Previous Year")
+            });
+        }
+        if (this.data.hasForecast) {
+            series.push({
+                key: "forecast",
+                color: this.settings.colors.forecast,
+                label: this.getChartLabel("forecast", "Forecast"),
+                dashed: true
+            });
+        }
 
         const xScale = d3.scaleBand<string>()
             .domain(this.categoryKeys())

@@ -36,10 +36,36 @@ export class AreaChart extends BaseChart {
         this.container.attr("transform", `translate(${this.dimensions.margin.left},${this.dimensions.margin.top})`);
         this.renderTitle();
 
-        const series: Series[] = [{ key: "actual", color: this.settings.colors.actual, label: "Actual", opacity: 0.4 }];
-        if (this.data.hasBudget) series.push({ key: "budget", color: this.settings.colors.budget, label: "Plan", opacity: 0.2 });
-        if (this.data.hasPreviousYear) series.push({ key: "previousYear", color: this.settings.colors.previousYear, label: "Previous Year", opacity: 0.2 });
-        if (this.data.hasForecast) series.push({ key: "forecast", color: this.settings.colors.forecast, label: "Forecast", opacity: 0.2 });
+        const series: Series[] = [{
+            key: "actual",
+            color: this.settings.colors.actual,
+            label: this.getChartLabel("actual", "Actual"),
+            opacity: 0.4
+        }];
+        if (this.data.hasBudget) {
+            series.push({
+                key: "budget",
+                color: this.settings.colors.budget,
+                label: this.getChartLabel("plan", "Plan"),
+                opacity: 0.2
+            });
+        }
+        if (this.data.hasPreviousYear) {
+            series.push({
+                key: "previousYear",
+                color: this.settings.colors.previousYear,
+                label: this.getChartLabel("previousYear", "Previous Year"),
+                opacity: 0.2
+            });
+        }
+        if (this.data.hasForecast) {
+            series.push({
+                key: "forecast",
+                color: this.settings.colors.forecast,
+                label: this.getChartLabel("forecast", "Forecast"),
+                opacity: 0.2
+            });
+        }
 
         const xScale = d3.scaleBand<string>()
             .domain(this.categoryKeys())

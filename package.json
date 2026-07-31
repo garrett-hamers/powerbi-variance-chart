@@ -1,7 +1,7 @@
 {
   "name": "atlyn-variance-chart",
   "description": "Open-source variance analysis visual for Microsoft Power BI.",
-  "version": "1.8.3.0",
+  "version": "1.8.4.0",
   "private": true,
   "repository": {
     "type": "git",
@@ -29,7 +29,9 @@
     "powerbi-models": "2.1.1",
     "powerbi-visuals-api": "5.11.1",
     "powerbi-visuals-utils-formattingmodel": "6.0.4",
-    "powerbi-visuals-utils-formattingutils": "6.1.2"
+    "powerbi-visuals-utils-formattingutils": "6.1.2",
+    "powerbi-visuals-utils-onobjectutils": "6.0.3",
+    "powerbi-visuals-utils-tooltiputils": "6.0.5"
   },
   "devDependencies": {
     "@playwright/test": "1.59.1",
@@ -39,7 +41,7 @@
     "eslint-plugin-powerbi-visuals": "1.1.1",
     "happy-dom": "20.11.0",
     "less": "^4.5.1",
-    "powerbi-visuals-tools": "7.2.0",
+    "powerbi-visuals-tools": "7.2.1",
     "typescript": "5.5.4",
     "vitest": "4.1.10"
   },

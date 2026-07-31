@@ -1,11 +1,11 @@
 # Atlyn Variance Chart
 
-A free, open-source Power BI custom visual for IBCS-compliant variance analysis. Built as an alternative to ZebraBI with 10 chart types, small multiples, interactive comments, cross-filtering, and drill-down support.
+A free, open-source Power BI custom visual for IBCS-aligned variance analysis. Built as an alternative to ZebraBI with 10 chart types, small multiples, interactive comments, cross-filtering, and drill-down support.
 
 ![Power BI](https://img.shields.io/badge/Power_BI-API_5.11.1-yellow)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Tests](https://img.shields.io/badge/Tests-359_passing-brightgreen)
-![Version](https://img.shields.io/badge/Version-1.8.3.0-blue)
+![Version](https://img.shields.io/badge/Version-1.8.4.0-blue)
 
 ---
 
@@ -24,9 +24,9 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
 | **Combo** | Column + line overlay |
 | **Dot** | Variance dot plot with sized markers |
 | **Lollipop** | Horizontal lollipop chart for variance display |
-| **Stacked Column** | Stacked column variant |
+| **Stacked Column** | Stacks additive Actual values; scenario comparisons are shown grouped to avoid false totals |
 
-### IBCS Compliance
+### IBCS-aligned notation
 - Solid fill for Actual values (dark gray `#404040`)
 - Outlined/dashed for Plan values
 - Hatched pattern for Forecast values
@@ -48,6 +48,7 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
 ### Cross-Filtering & Drill-Down
 - Click a bar to cross-filter slicers and other visuals on the page
 - Ctrl+click for multi-select
+- Incoming Power BI highlights dim non-highlighted data without losing context
 - Clear-selection button (×) appears when data is selected
 - Double-click to drill down through hierarchical categories
 - Drill-up button for navigation
@@ -62,6 +63,9 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
   per-series values) are shown or hidden together.
 - Configurable decimal places and display units (Auto, K, M, B)
 - Negative format: minus sign or parentheses
+- Localized runtime labels and format-pane card names (English, German, French, and Japanese resources)
+- Pointer and touch-aware tooltips, including modern report-page tooltip support
+- On-object formatting hooks for titles and data points
 
 ---
 
@@ -93,10 +97,11 @@ A free, open-source Power BI custom visual for IBCS-compliant variance analysis.
 | **Design** | Colors for actual, plan, previous year, forecast, positive/negative variance |
 | **Difference Highlighting** | Enable/disable, threshold, highlight positive/negative |
 | **Axis Break Marker** | Show/hide a non-destructive marker on the continuous scale, marker value |
+| **Analytics: Reference Line** | Show/hide, label, value, color, solid/dashed/dotted style |
 | **Top N + Others** | Enable, count, sort by/direction, show Others, Others label |
 | **Small Multiples** | Grid columns, spacing, show headers, scale mode |
 | **Responsive Design** | Enable, minimum chart width |
-| **Interaction** | Selection, tooltips, drilldown, cross-filter mode |
+| **Interaction** | Selection, incoming highlights, tooltips, drilldown, cross-filter mode |
 
 ---
 
@@ -130,7 +135,7 @@ validation entry point — run it from a clean `npm ci` before considering a cha
 
 ## Testing
 
-359 automated unit tests, plus a browser-based end-to-end suite.
+369 automated unit tests, plus a browser-based end-to-end suite.
 
 | Suite | Coverage |
 |-------|----------|
@@ -148,9 +153,9 @@ npm test
 
 ### End-to-end (Playwright)
 
-189 browser tests covering accessibility (axe-core, keyboard, ARIA), context menus,
-format-pane coverage, theming (light/dark/high-contrast), performance budgets, and
-rendering of every chart type.
+206 browser tests covering accessibility (axe-core, keyboard, ARIA), context menus,
+pointer/touch tooltips, format-pane coverage, theming (light/dark/high-contrast),
+performance budgets, and rendering of every chart type.
 
 ```bash
 npx playwright install chromium   # one time
@@ -165,8 +170,9 @@ stays fast and free of browser downloads.
 ## Tech Stack
 
 - **Power BI Visuals API** 5.11.1
-- **Power BI Visuals Tools** 7.2.0
+- **Power BI Visuals Tools** 7.2.1
 - **D3.js** for SVG rendering
+- **Power BI tooltip and on-object utilities** for host-native interactions
 - **TypeScript** with strict mode
 - **Vitest** + happy-dom for testing
 - **Webpack** for bundling

@@ -4,6 +4,7 @@
 
 "use strict";
 
+import powerbi from "powerbi-visuals-api";
 import { formattingSettings } from "powerbi-visuals-utils-formattingmodel";
 
 import { DEFAULT_IBCS_COLORS } from "./utils/colors";
@@ -11,6 +12,13 @@ import { DEFAULT_IBCS_COLORS } from "./utils/colors";
 import FormattingSettingsCard = formattingSettings.SimpleCard;
 import FormattingSettingsSlice = formattingSettings.Slice;
 import FormattingSettingsModel = formattingSettings.Model;
+
+function numberRange(min: number, max: number): powerbi.visuals.NumUpDownFormat {
+    return {
+        minValue: { type: 0, value: min },
+        maxValue: { type: 1, value: max }
+    };
+}
 
 /**
  * Chart Settings Card - Controls chart type and display options
@@ -23,7 +31,7 @@ class ChartSettingsCard extends FormattingSettingsCard {
             { value: "variance", displayName: "Variance Chart" },
             { value: "waterfall", displayName: "Waterfall Chart" },
             { value: "column", displayName: "Column Chart" },
-            { value: "columnStacked", displayName: "Stacked Column" },
+            { value: "columnStacked", displayName: "Stacked Column (additive)" },
             { value: "bar", displayName: "Bar Chart" },
             { value: "line", displayName: "Line Chart" },
             { value: "area", displayName: "Area Chart" },
@@ -48,12 +56,13 @@ class ChartSettingsCard extends FormattingSettingsCard {
     invertVariance = new formattingSettings.ToggleSwitch({
         name: "invertVariance",
         displayName: "Invert Variance (for costs)",
-        description: "Flip positive/negative for cost metrics where lower is better",
+        description: "Flip sign and favorability for cost metrics where lower is better; waterfalls use the mirrored cost perspective",
         value: false
     });
 
     name: string = "chartSettings";
     displayName: string = "Chart Settings";
+    displayNameKey: string = "Card_ChartSettings";
     slices: Array<FormattingSettingsSlice> = [
         this.chartType, 
         this.comparisonType,
@@ -81,7 +90,8 @@ class TitleCard extends FormattingSettingsCard {
     fontSize = new formattingSettings.NumUpDown({
         name: "fontSize",
         displayName: "Font Size",
-        value: 14
+        value: 14,
+        options: numberRange(8, 72)
     });
 
     fontColor = new formattingSettings.ColorPicker({
@@ -103,6 +113,7 @@ class TitleCard extends FormattingSettingsCard {
 
     name: string = "title";
     displayName: string = "Title";
+    displayNameKey: string = "Card_Title";
     slices: Array<FormattingSettingsSlice> = [
         this.show,
         this.titleText,
@@ -143,13 +154,15 @@ class DataLabelsCard extends FormattingSettingsCard {
     fontSize = new formattingSettings.NumUpDown({
         name: "fontSize",
         displayName: "Font Size",
-        value: 10
+        value: 10,
+        options: numberRange(6, 48)
     });
 
     decimalPlaces = new formattingSettings.NumUpDown({
         name: "decimalPlaces",
         displayName: "Decimal Places",
-        value: 1
+        value: 1,
+        options: numberRange(0, 20)
     });
 
     displayUnits = new formattingSettings.ItemDropdown({
@@ -191,6 +204,7 @@ class DataLabelsCard extends FormattingSettingsCard {
 
     name: string = "dataLabels";
     displayName: string = "Data Labels";
+    displayNameKey: string = "Card_DataLabels";
     slices: Array<FormattingSettingsSlice> = [
         this.show,
         this.showValues,
@@ -217,7 +231,8 @@ class CategoriesCard extends FormattingSettingsCard {
     fontSize = new formattingSettings.NumUpDown({
         name: "fontSize",
         displayName: "Font Size",
-        value: 10
+        value: 10,
+        options: numberRange(6, 48)
     });
 
     fontColor = new formattingSettings.ColorPicker({
@@ -242,11 +257,13 @@ class CategoriesCard extends FormattingSettingsCard {
     maxWidth = new formattingSettings.NumUpDown({
         name: "maxWidth",
         displayName: "Max Width (px)",
-        value: 100
+        value: 100,
+        options: numberRange(0, 1000)
     });
 
     name: string = "categories";
     displayName: string = "Categories";
+    displayNameKey: string = "Card_Categories";
     slices: Array<FormattingSettingsSlice> = [
         this.show,
         this.fontSize,
@@ -281,11 +298,13 @@ class LegendCard extends FormattingSettingsCard {
     fontSize = new formattingSettings.NumUpDown({
         name: "fontSize",
         displayName: "Font Size",
-        value: 10
+        value: 10,
+        options: numberRange(6, 48)
     });
 
     name: string = "legend";
     displayName: string = "Legend";
+    displayNameKey: string = "Card_Legend";
     slices: Array<FormattingSettingsSlice> = [
         this.show,
         this.position,
@@ -330,19 +349,22 @@ class CommentBoxCard extends FormattingSettingsCard {
     padding = new formattingSettings.NumUpDown({
         name: "padding",
         displayName: "Padding",
-        value: 6
+        value: 6,
+        options: numberRange(0, 100)
     });
 
     gap = new formattingSettings.NumUpDown({
         name: "gap",
         displayName: "Gap between comments",
-        value: 8
+        value: 8,
+        options: numberRange(0, 100)
     });
 
     fontSize = new formattingSettings.NumUpDown({
         name: "fontSize",
         displayName: "Font Size",
-        value: 10
+        value: 10,
+        options: numberRange(6, 48)
     });
 
     fontColor = new formattingSettings.ColorPicker({
@@ -354,7 +376,8 @@ class CommentBoxCard extends FormattingSettingsCard {
     markerSize = new formattingSettings.NumUpDown({
         name: "markerSize",
         displayName: "Marker Size",
-        value: 18
+        value: 18,
+        options: numberRange(4, 64)
     });
 
     markerColor = new formattingSettings.ColorPicker({
@@ -365,6 +388,7 @@ class CommentBoxCard extends FormattingSettingsCard {
 
     name: string = "commentBox";
     displayName: string = "Comments";
+    displayNameKey: string = "Card_Comments";
     slices: Array<FormattingSettingsSlice> = [
         this.show,
         this.showVariance,
@@ -426,6 +450,7 @@ class DesignCard extends FormattingSettingsCard {
 
     name: string = "design";
     displayName: string = "Design";
+    displayNameKey: string = "Card_Design";
     slices: Array<FormattingSettingsSlice> = [
         this.actualColor,
         this.budgetColor,
@@ -450,7 +475,8 @@ class DifferenceHighlightingCard extends FormattingSettingsCard {
         name: "threshold",
         displayName: "Threshold (%)",
         description: "Highlight variances above this percentage",
-        value: 10
+        value: 10,
+        options: numberRange(0, 100)
     });
 
     highlightPositive = new formattingSettings.ToggleSwitch({
@@ -467,6 +493,7 @@ class DifferenceHighlightingCard extends FormattingSettingsCard {
 
     name: string = "differenceHighlighting";
     displayName: string = "Difference Highlighting";
+    displayNameKey: string = "Card_DifferenceHighlighting";
     slices: Array<FormattingSettingsSlice> = [
         this.show,
         this.threshold,
@@ -493,9 +520,63 @@ class AxisBreakCard extends FormattingSettingsCard {
 
     name: string = "axisBreak";
     displayName: string = "Axis Break Marker";
+    displayNameKey: string = "Card_AxisBreak";
     slices: Array<FormattingSettingsSlice> = [
         this.show,
         this.breakValue
+    ];
+}
+
+/**
+ * Reference line Card - Analytical reference value.
+ */
+class ReferenceLineCard extends FormattingSettingsCard {
+    show = new formattingSettings.ToggleSwitch({
+        name: "show",
+        displayName: "Show Reference Line",
+        value: false
+    });
+
+    displayNameProperty = new formattingSettings.TextInput({
+        name: "displayName",
+        displayName: "Label",
+        value: "Reference line",
+        placeholder: "Reference line"
+    });
+
+    value = new formattingSettings.NumUpDown({
+        name: "value",
+        displayName: "Value",
+        value: 0
+    });
+
+    color = new formattingSettings.ColorPicker({
+        name: "color",
+        displayName: "Color",
+        value: { value: "#808080" }
+    });
+
+    style = new formattingSettings.ItemDropdown({
+        name: "style",
+        displayName: "Style",
+        items: [
+            { value: "solid", displayName: "Solid" },
+            { value: "dashed", displayName: "Dashed" },
+            { value: "dotted", displayName: "Dotted" }
+        ],
+        value: { value: "dashed", displayName: "Dashed" }
+    });
+
+    name: string = "referenceLine";
+    displayName: string = "Reference Line";
+    displayNameKey: string = "Card_ReferenceLine";
+    analyticsPane = true;
+    topLevelSlice = this.show;
+    slices: Array<FormattingSettingsSlice> = [
+        this.displayNameProperty,
+        this.value,
+        this.color,
+        this.style
     ];
 }
 
@@ -534,6 +615,7 @@ class InteractionCard extends FormattingSettingsCard {
 
     name: string = "interaction";
     displayName: string = "Interaction";
+    displayNameKey: string = "Card_Interaction";
     slices: Array<FormattingSettingsSlice> = [
         this.enableSelection,
         this.enableTooltips,
@@ -549,12 +631,13 @@ class AboutCard extends FormattingSettingsCard {
     version = new formattingSettings.TextInput({
         name: "version",
         displayName: "Version",
-        value: "1.8.3.0",
+        value: "1.8.4.0",
         placeholder: ""
     });
 
     name: string = "about";
     displayName: string = "About";
+    displayNameKey: string = "Card_About";
     slices: Array<FormattingSettingsSlice> = [this.version];
 }
 
@@ -571,7 +654,8 @@ class TopNCard extends FormattingSettingsCard {
     count = new formattingSettings.NumUpDown({
         name: "count",
         displayName: "Show Top N",
-        value: 10
+        value: 10,
+        options: numberRange(1, 1000)
     });
 
     sortBy = new formattingSettings.ItemDropdown({
@@ -610,6 +694,7 @@ class TopNCard extends FormattingSettingsCard {
 
     name: string = "topN";
     displayName: string = "Top N + Others";
+    displayNameKey: string = "Card_TopN";
     slices: Array<FormattingSettingsSlice> = [
         this.enable,
         this.count,
@@ -628,13 +713,15 @@ class SmallMultiplesCard extends FormattingSettingsCard {
         name: "columns",
         displayName: "Columns",
         description: "Number of columns in the grid (0 = auto)",
-        value: 0
+        value: 0,
+        options: numberRange(0, 20)
     });
 
     spacing = new formattingSettings.NumUpDown({
         name: "spacing",
         displayName: "Spacing (px)",
-        value: 10
+        value: 10,
+        options: numberRange(0, 100)
     });
 
     showHeaders = new formattingSettings.ToggleSwitch({
@@ -655,6 +742,7 @@ class SmallMultiplesCard extends FormattingSettingsCard {
 
     name: string = "smallMultiples";
     displayName: string = "Small Multiples";
+    displayNameKey: string = "Card_SmallMultiples";
     slices: Array<FormattingSettingsSlice> = [
         this.columns,
         this.spacing,
@@ -676,11 +764,13 @@ class ResponsiveCard extends FormattingSettingsCard {
     minChartWidth = new formattingSettings.NumUpDown({
         name: "minChartWidth",
         displayName: "Min Chart Width (px)",
-        value: 150
+        value: 150,
+        options: numberRange(40, 2000)
     });
 
     name: string = "responsive";
     displayName: string = "Responsive Design";
+    displayNameKey: string = "Card_Responsive";
     slices: Array<FormattingSettingsSlice> = [
         this.enable,
         this.minChartWidth
@@ -700,6 +790,7 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
     designCard = new DesignCard();
     differenceHighlightingCard = new DifferenceHighlightingCard();
     axisBreakCard = new AxisBreakCard();
+    referenceLineCard = new ReferenceLineCard();
     topNCard = new TopNCard();
     smallMultiplesCard = new SmallMultiplesCard();
     responsiveCard = new ResponsiveCard();
@@ -719,6 +810,7 @@ export class VisualFormattingSettingsModel extends FormattingSettingsModel {
         this.designCard,
         this.differenceHighlightingCard,
         this.axisBreakCard,
+        this.referenceLineCard,
         this.topNCard,
         this.smallMultiplesCard,
         this.responsiveCard,

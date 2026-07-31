@@ -95,6 +95,21 @@ describe("parseDataView", () => {
         expect(result.dataPoints[1].comment).toBe("");
     });
 
+    it("preserves active Power BI highlight state per source row", () => {
+        const dv = buildMockDataView({
+            categories: ["Jan", "Feb", "Mar"],
+            actual: [100, 200, 300],
+            budget: [90, 210, 280],
+            highlights: {
+                actual: [100, null, null],
+                budget: [90, null, null]
+            }
+        });
+        const result = parseDataView(dv)!;
+        expect(result.hasHighlights).toBe(true);
+        expect(result.dataPoints.map(point => point.highlighted)).toEqual([true, false, false]);
+    });
+
     it("parses tooltips role measures into data points", () => {
         const dv = buildMockDataView({
             categories: ["Jan", "Feb"],

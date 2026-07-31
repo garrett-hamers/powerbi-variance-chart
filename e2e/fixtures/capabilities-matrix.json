@@ -69,18 +69,18 @@
     }
   ],
   "supports": {
-    "highlight": false,
+    "highlight": true,
     "keyboardFocus": true,
     "landingPage": true,
     "multiVisualSelection": true,
-    "synchronizingFilterState": true,
     "drilldown": {
       "roles": [
         "category"
       ]
     },
     "tooltipsDefault": true,
-    "tooltipsCanvas": true
+    "tooltipsCanvas": true,
+    "sorting": true
   },
   "properties": [
     {
@@ -111,7 +111,7 @@
         },
         {
           "value": "columnStacked",
-          "displayName": "Stacked Column"
+          "displayName": "Stacked Column (additive)"
         },
         {
           "value": "bar",
@@ -613,6 +613,55 @@
       "defaultValue": null
     },
     {
+      "objectName": "referenceLine",
+      "propertyName": "show",
+      "type": "bool",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "referenceLine",
+      "propertyName": "displayName",
+      "type": "text",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "referenceLine",
+      "propertyName": "value",
+      "type": "numeric",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "referenceLine",
+      "propertyName": "color",
+      "type": "color",
+      "isFilter": false,
+      "defaultValue": null
+    },
+    {
+      "objectName": "referenceLine",
+      "propertyName": "style",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "solid",
+          "displayName": "Solid"
+        },
+        {
+          "value": "dashed",
+          "displayName": "Dashed"
+        },
+        {
+          "value": "dotted",
+          "displayName": "Dotted"
+        }
+      ]
+    },
+    {
       "objectName": "interaction",
       "propertyName": "enableSelection",
       "type": "bool",
@@ -776,7 +825,7 @@
       "defaultValue": null
     }
   ],
-  "propertyCount": 64,
+  "propertyCount": 69,
   "warnings": [],
-  "generatedAt": "2026-07-28T01:43:21.362Z"
+  "generatedAt": "2026-07-31T02:17:52.989Z"
 }

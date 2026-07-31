@@ -4,6 +4,7 @@
 export { 
     BaseChart, 
     ChartSettings, 
+    ChartLabels,
     ChartDimensions,
     TitleSettings,
     DataLabelSettings,
@@ -96,11 +97,13 @@ export function getChartValueDomain(
 
     if (chartType === "waterfall") {
         const groups = data.hasGroups ? getGroupKeys(data) : [""];
+        let canInvertBridge = comparison !== null;
         for (const group of groups) {
             const points = data.hasGroups
                 ? data.dataPoints.filter(point => getDataPointGroupKey(point) === group)
                 : data.dataPoints;
             if (comparison === null) {
+                canInvertBridge = false;
                 values.push(...points.map(point => point.actual));
                 continue;
             }
@@ -110,12 +113,14 @@ export function getChartValueDomain(
                 && getComparisonValue(point, comparison) !== null
             );
             if (pairs.length === 0) {
+                canInvertBridge = false;
                 values.push(...points.map(point => point.actual));
                 continue;
             }
             const opening = finiteSum(pairs.map(point => getComparisonValue(point, comparison)));
             const closing = finiteSum(pairs.map(point => point.actual));
             if (opening === null || closing === null) {
+                canInvertBridge = false;
                 values.push(...points.map(point => point.actual));
                 continue;
             }
@@ -141,18 +146,24 @@ export function getChartValueDomain(
                 groupValues.push(closing);
                 values.push(...groupValues);
             } else {
+                canInvertBridge = false;
                 values.push(...points.map(point => point.actual));
             }
         }
-        return finiteDomain(values);
+        return finiteDomain(
+            invertVariance && canInvertBridge
+                ? values.map(value => value === null ? null : -value)
+                : values
+        );
     }
 
     if (chartType === "columnStacked") {
         for (const point of data.dataPoints) {
-            values.push(...finiteStackExtents([
-                point.actual,
-                comparison === null ? null : getComparisonValue(point, comparison)
-            ]));
+            if (comparison === null) {
+                values.push(...finiteStackExtents([point.actual]));
+            } else {
+                values.push(point.actual, getComparisonValue(point, comparison));
+            }
         }
         return finiteDomain(values);
     }
