@@ -125,13 +125,13 @@ export class DotChart extends BaseChart {
 
         this.renderCommentMarkers(xScale, yScale);
         const legend: Array<{ label: string; color: string; outlined?: boolean }> = [
-            { label: "Actual", color: this.settings.colors.actual }
+            { label: this.getChartLabel("actual", "Actual"), color: this.settings.colors.actual }
         ];
         if (comparisonPresentation) {
             legend.unshift({ label: comparisonPresentation.label, color: comparisonPresentation.color, outlined: true });
             legend.push(
-                { label: "+Variance", color: this.settings.colors.positiveVariance },
-                { label: "−Variance", color: this.settings.colors.negativeVariance }
+                { label: this.getChartLabel("positiveVariance", "+Variance"), color: this.settings.colors.positiveVariance },
+                { label: this.getChartLabel("negativeVariance", "−Variance"), color: this.settings.colors.negativeVariance }
             );
         }
         this.renderLegend(legend);

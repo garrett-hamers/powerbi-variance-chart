@@ -38,6 +38,8 @@ export interface DataPoint {
     varianceToFC: FiniteValue;
     varianceToFCPct: FiniteValue;
     tooltipFields?: TooltipField[];
+    /** True when Power BI supplied a non-null highlight value for this row. */
+    highlighted?: boolean;
     /** Original categorical row. Aggregates and synthetic points do not have one. */
     index: number | null;
     /** Original rows represented by this point (one for normal points, many for Others). */
@@ -62,6 +64,8 @@ export interface ParsedData {
     hasForecast: boolean;
     hasGroups: boolean;
     hasComments: boolean;
+    /** True when the host supplied an active, non-null highlights array. */
+    hasHighlights?: boolean;
     totals: {
         actual: FiniteValue;
         budget: FiniteValue;
@@ -76,6 +80,7 @@ export interface ParsedData {
 
 interface ValueColumnInfo {
     values: PrimitiveValue[];
+    highlights?: PrimitiveValue[];
     format?: string;
 }
 
@@ -144,8 +149,14 @@ export function finiteStackExtents(values: FiniteValue[]): [number, number] {
     return [negative, positive];
 }
 
-function valueAt(column: ValueColumnInfo | undefined, index: number): FiniteValue {
-    return column ? toFiniteNumber(column.values[index]) : null;
+function valueAt(
+    column: ValueColumnInfo | undefined,
+    index: number,
+    highlighted = false
+): FiniteValue {
+    if (!column) return null;
+    const values = highlighted ? column.highlights : column.values;
+    return values ? toFiniteNumber(values[index]) : null;
 }
 
 function textAt(values: PrimitiveValue[], index: number): string {
@@ -205,6 +216,7 @@ export function subsetParsedData(data: ParsedData, dataPoints: DataPoint[]): Par
         groupKeys,
         hasGroups: data.hasGroups,
         hasComments: dataPoints.some(point => point.comment.trim() !== ""),
+        hasHighlights: data.hasHighlights === true && dataPoints.some(point => point.highlighted === true),
         totals: {
             actual: finiteSum(dataPoints.map(point => point.actual)),
             budget: data.hasBudget ? finiteSum(dataPoints.map(point => point.budget)) : null,
@@ -254,6 +266,7 @@ export function parseDataView(dataView: DataView, locale?: string): ParsedData |
     for (const column of values) {
         const info: ValueColumnInfo = {
             values: column.values,
+            highlights: column.highlights,
             format: column.source.format
         };
         const roles = column.source.roles;
@@ -272,12 +285,20 @@ export function parseDataView(dataView: DataView, locale?: string): ParsedData |
     if (!actualColumn) return null;
 
     const dataPoints: DataPoint[] = [];
+    const highlightColumns = [actualColumn, budgetColumn, pyColumn, forecastColumn];
+    const hasHighlights = highlightColumns.some(column =>
+        Array.isArray(column?.highlights)
+        && column.highlights.some(value => value !== null && value !== undefined)
+    );
 
     for (let i = 0; i < categoryValues.length; i++) {
         const actual = valueAt(actualColumn, i);
         const budget = valueAt(budgetColumn, i);
         const previousYear = valueAt(pyColumn, i);
         const forecast = valueAt(forecastColumn, i);
+        const highlighted = hasHighlights && highlightColumns.some(column =>
+            valueAt(column, i, true) !== null
+        );
         const [varianceToBudget, varianceToBudgetPct] = varianceFields(actual, budget);
         const [varianceToPY, varianceToPYPct] = varianceFields(actual, previousYear);
         const [varianceToFC, varianceToFCPct] = varianceFields(actual, forecast);
@@ -313,6 +334,7 @@ export function parseDataView(dataView: DataView, locale?: string): ParsedData |
             varianceToFC,
             varianceToFCPct,
             tooltipFields,
+            highlighted,
             index: i,
             sourceIndices: [i]
         });
@@ -332,6 +354,7 @@ export function parseDataView(dataView: DataView, locale?: string): ParsedData |
         hasForecast,
         hasGroups: groupValues.length > 0,
         hasComments: commentValues.length > 0,
+        hasHighlights,
         totals: { actual: null, budget: null, previousYear: null, forecast: null },
         maxValue: 0,
         minValue: 0,
@@ -451,6 +474,7 @@ export function applyTopN(data: ParsedData, options: TopNOptions): ParsedData {
             varianceToFC,
             varianceToFCPct,
             tooltipFields: [],
+            highlighted: data.hasHighlights === true && rest.some(point => point.highlighted === true),
             index: null,
             sourceIndices: rest.flatMap(point => point.sourceIndices)
         });

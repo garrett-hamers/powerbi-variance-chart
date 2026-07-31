@@ -27,7 +27,11 @@ export class BarChart extends BaseChart {
         this.container.attr("transform", `translate(${this.dimensions.margin.left},${this.dimensions.margin.top})`);
         this.renderTitle();
 
-        const series: Series[] = [{ key: "actual", color: this.settings.colors.actual, label: "Actual" }];
+        const series: Series[] = [{
+            key: "actual",
+            color: this.settings.colors.actual,
+            label: this.getChartLabel("actual", "Actual")
+        }];
         const comparison = this.getComparisonPresentation();
         if (comparison) series.push(comparison);
         const values: FiniteValue[] = dataPoints.flatMap(point => series.map(item => point[item.key]));
@@ -38,15 +42,7 @@ export class BarChart extends BaseChart {
 
         const fontSize = this.settings.categories?.fontSize ?? this.settings.fontSize;
         const fontColor = this.settings.categories?.fontColor ?? this.settings.fontColor;
-        if (this.settings.categories.show) {
-            const yAxis = this.container.append("g")
-                .attr("class", "y-axis")
-                .call(d3.axisLeft(yScale).tickFormat(key => labels.get(String(key)) ?? String(key)));
-            yAxis.selectAll(".domain, line").attr("stroke", this.settings.foreground);
-            yAxis.selectAll("text")
-                .style("font-size", `${fontSize}px`)
-                .style("fill", fontColor);
-        }
+        this.renderCategoryYAxis(yScale, labels);
         const xAxis = this.container.append("g")
             .attr("class", "x-axis")
             .attr("transform", `translate(0,${this.chartHeight})`)
@@ -58,6 +54,7 @@ export class BarChart extends BaseChart {
         if (this.settings.axisBreak.show) {
             this.renderHorizontalAxisBreak(xScale, this.settings.axisBreak.breakValue);
         }
+        this.renderHorizontalReferenceLine(xScale);
 
         const showLabels = (this.settings.dataLabels?.show ?? false)
             && this.settings.dataLabels.showValues;
@@ -114,6 +111,7 @@ export class BarChart extends BaseChart {
             });
         });
 
+        this.renderHorizontalCommentMarkers(xScale, yScale);
         this.renderLegend(series.map(item => ({ label: item.label, color: item.color })));
         this.renderCommentBox();
     }

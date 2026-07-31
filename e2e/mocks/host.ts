@@ -56,6 +56,7 @@ export interface MockHostSpies {
     eventServiceStarted: Spy;
     eventServiceFinished: Spy;
     eventServiceFailed: Spy<{ reason?: string }>;
+    displayWarningIcon: Spy<{ title: string; details: string }>;
 }
 
 export interface MockPalette {
@@ -181,6 +182,7 @@ export function createMockHost(options?: CreateMockHostOptions): MockHost {
         eventServiceStarted: createSpy(),
         eventServiceFinished: createSpy(),
         eventServiceFailed: createSpy(),
+        displayWarningIcon: createSpy(),
     };
 
     let currentPalette: MockPalette = { ...DEFAULT_PALETTE, ...(options?.palette ?? {}) };
@@ -190,19 +192,19 @@ export function createMockHost(options?: CreateMockHostOptions): MockHost {
 
     /* colorPalette */
     let colorIndex = 0;
-    const colorCache = new Map<string, powerbi.IFill>();
-    const makeFill = (solid: string): powerbi.IFill => ({ solid: { color: solid } } as any);
+    const colorCache = new Map<string, powerbi.IColorInfo>();
+    const makeColor = (value: string): powerbi.IColorInfo => ({ value });
 
     const colorPalette: any = {
-        getColor(key: string): powerbi.IFill {
+        getColor(key: string): powerbi.IColorInfo {
             const cacheKey = String(key);
             const cached = colorCache.get(cacheKey);
             if (cached) return cached;
             const color = DEFAULT_COLORS[colorIndex % DEFAULT_COLORS.length];
             colorIndex++;
-            const fill = makeFill(color);
-            colorCache.set(cacheKey, fill);
-            return fill;
+            const colorInfo = makeColor(color);
+            colorCache.set(cacheKey, colorInfo);
+            return colorInfo;
         },
         reset() {
             colorIndex = 0;
@@ -213,28 +215,28 @@ export function createMockHost(options?: CreateMockHostOptions): MockHost {
             return highContrast;
         },
         get foreground() {
-            return makeFill(currentPalette.foreground);
+            return makeColor(currentPalette.foreground);
         },
         get foregroundSelected() {
-            return makeFill(currentPalette.foregroundSelected);
+            return makeColor(currentPalette.foregroundSelected);
         },
         get background() {
-            return makeFill(currentPalette.background);
+            return makeColor(currentPalette.background);
         },
         get hyperlink() {
-            return makeFill(currentPalette.hyperlink);
+            return makeColor(currentPalette.hyperlink);
         },
         get foregroundButton() {
-            return makeFill(currentPalette.foreground);
+            return makeColor(currentPalette.foreground);
         },
         get backgroundLight() {
-            return makeFill(currentPalette.background);
+            return makeColor(currentPalette.background);
         },
         get backgroundNeutral() {
-            return makeFill(currentPalette.background);
+            return makeColor(currentPalette.background);
         },
         get shapes() {
-            return makeFill(currentPalette.foreground);
+            return makeColor(currentPalette.foreground);
         },
     };
 
@@ -305,6 +307,10 @@ export function createMockHost(options?: CreateMockHostOptions): MockHost {
         colorPalette,
         tooltipService,
         eventService,
+        subSelectionService: {
+            subSelect: () => { /* noop */ },
+            updateRegionOutlines: () => { /* noop */ }
+        },
         createSelectionManager: () => selectionManager,
         createSelectionIdBuilder: () => createSelectionIdBuilder(),
         createLocalizationManager: () => localizationManager,
@@ -313,7 +319,7 @@ export function createMockHost(options?: CreateMockHostOptions): MockHost {
         applyJsonFilter: (filter: any, objectName: string, propertyName: string, action: any) =>
             record(spies.applyJsonFilter, { filter, objectName, propertyName, action }),
         refreshHostData: () => { /* noop */ },
-        displayWarningIcon: () => { /* noop */ },
+        displayWarningIcon: (title: string, details: string) => record(spies.displayWarningIcon, { title, details }),
         fetchMoreData: () => false,
         switchFocusModeState: () => { /* noop */ },
         openModalDialog: () => Promise.resolve({}),

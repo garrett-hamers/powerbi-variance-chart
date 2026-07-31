@@ -1,5 +1,5 @@
 /**
- * Variance Chart - IBCS-compliant variance comparison chart
+ * Variance Chart - IBCS-aligned variance comparison chart
  */
 import * as d3 from "d3";
 import { BaseChart, ChartSettings, ChartDimensions } from "./baseChart";
@@ -161,12 +161,12 @@ export class VarianceChart extends BaseChart {
         });
 
         this.renderCommentMarkers(xScale, yScale);
-        const legend = [{ label: "Actual", color: this.settings.colors.actual }];
+        const legend = [{ label: this.getChartLabel("actual", "Actual"), color: this.settings.colors.actual }];
         if (comparisonPresentation) {
             legend.unshift({ label: comparisonPresentation.label, color: comparisonPresentation.color });
             legend.push(
-                { label: "+Variance", color: this.settings.colors.positiveVariance },
-                { label: "−Variance", color: this.settings.colors.negativeVariance }
+                { label: this.getChartLabel("positiveVariance", "+Variance"), color: this.settings.colors.positiveVariance },
+                { label: this.getChartLabel("negativeVariance", "−Variance"), color: this.settings.colors.negativeVariance }
             );
         }
         this.renderLegend(legend);

@@ -35,7 +35,7 @@ export class WaterfallChart extends BaseChart {
         this.renderTitle();
         const waterfallData = this.buildWaterfallData();
         if (waterfallData.length === 0) {
-            this.renderLegend([{ label: "Actual", color: this.settings.colors.actual }]);
+            this.renderLegend([{ label: this.getChartLabel("actual", "Actual"), color: this.settings.colors.actual }]);
             return;
         }
 
@@ -153,13 +153,14 @@ export class WaterfallChart extends BaseChart {
             }
         });
 
+        this.renderWaterfallCommentMarkers(xScale, yScale);
         const comparison = this.getComparisonPresentation();
-        const legend = [{ label: "Actual", color: this.settings.colors.actual }];
+        const legend = [{ label: this.getChartLabel("actual", "Actual"), color: this.settings.colors.actual }];
         if (comparison) {
             legend.unshift({ label: comparison.label, color: comparison.color });
             legend.push(
-                { label: "+Variance", color: this.settings.colors.positiveVariance },
-                { label: "−Variance", color: this.settings.colors.negativeVariance }
+                { label: this.getChartLabel("positiveVariance", "+Variance"), color: this.settings.colors.positiveVariance },
+                { label: this.getChartLabel("negativeVariance", "−Variance"), color: this.settings.colors.negativeVariance }
             );
         }
         this.renderLegend(legend);
@@ -202,12 +203,13 @@ export class WaterfallChart extends BaseChart {
         }
 
         const comparisonLabel = this.getComparisonPresentation()?.label ?? "Comparison";
+        const displayedOpening = this.settings.invertVariance ? -totalComparison : totalComparison;
         const items: WaterfallItem[] = [{
             key: `${this.instanceId}-opening`,
             label: `${comparisonLabel} Total`,
-            value: totalComparison,
+            value: displayedOpening,
             start: 0,
-            end: totalComparison,
+            end: displayedOpening,
             isTotal: true,
             sourceIndex: null,
             sourceIndices: [],
@@ -215,7 +217,7 @@ export class WaterfallChart extends BaseChart {
             variancePct: null,
             synthetic: true
         }];
-        let runningTotal = totalComparison;
+        let runningTotal = displayedOpening;
 
         this.data.dataPoints.forEach((point, position) => {
             const isSubtotal = point.comment.startsWith("=");
@@ -246,14 +248,15 @@ export class WaterfallChart extends BaseChart {
                 : comparisonType === "previousYear"
                     ? point.varianceToPYPct
                     : point.varianceToFCPct;
-            const next = safeAdd(runningTotal, rawVariance);
-            if (rawVariance === null || next === null) return;
+            if (rawVariance === null) return;
             const displayVariance = this.settings.invertVariance ? -rawVariance : rawVariance;
+            const next = safeAdd(runningTotal, displayVariance);
+            if (next === null) return;
             const variancePct = rawPct === null ? null : (this.settings.invertVariance ? -rawPct : rawPct);
             items.push({
                 key: `step-${point.index ?? position}`,
                 label: point.category,
-                value: rawVariance,
+                value: displayVariance,
                 start: runningTotal,
                 end: next,
                 isTotal: false,
@@ -268,10 +271,10 @@ export class WaterfallChart extends BaseChart {
 
         items.push({
             key: `${this.instanceId}-closing`,
-            label: "Actual",
-            value: totalActual,
+            label: this.getChartLabel("actual", "Actual"),
+            value: this.settings.invertVariance ? -totalActual : totalActual,
             start: 0,
-            end: totalActual,
+            end: this.settings.invertVariance ? -totalActual : totalActual,
             isTotal: true,
             sourceIndex: null,
             sourceIndices: [],

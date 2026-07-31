@@ -5,7 +5,15 @@
 
 import powerbi from "powerbi-visuals-api";
 import { FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
+import { createTooltipServiceWrapper, ITooltipServiceWrapper } from "powerbi-visuals-utils-tooltiputils";
 import * as d3 from "d3";
+import {
+    HtmlSubSelectableClass,
+    HtmlSubSelectionHelper,
+    SubSelectableDisplayNameAttribute,
+    SubSelectableObjectNameAttribute,
+    SubSelectableTypeAttribute
+} from "powerbi-visuals-utils-onobjectutils";
 import {
     BasicFilter,
     TupleFilter,
@@ -46,9 +54,17 @@ import {
     parseDataView,
     subsetParsedData
 } from "./dataParser";
-import { ChartDimensions, ChartSettings, ChartType, createChart, getChartValueDomain } from "./charts";
+import {
+    ChartDimensions,
+    ChartLabels,
+    ChartSettings,
+    ChartType,
+    createChart,
+    getChartValueDomain
+} from "./charts";
 import { IBCSColors } from "./utils/colors";
 import { formatModelValue, formatNumber, formatPercent, NumberScale } from "./utils/formatting";
+import { VisualLocalizer } from "./utils/localization";
 import {
     calculateCellLayout,
     calculateLayout as calculateLayoutEngine,
@@ -152,6 +168,10 @@ export class Visual implements IVisual {
     private readonly eventService: IVisualEventService;
     private readonly selectionManager: ISelectionManager;
     private readonly formattingSettingsService: FormattingSettingsService;
+    private readonly tooltipServiceWrapper: ITooltipServiceWrapper;
+    private readonly localizer: VisualLocalizer;
+    private readonly subSelectionHelper?: HtmlSubSelectionHelper;
+    public visualOnObjectFormatting?: powerbi.extensibility.visual.VisualOnObjectFormatting;
     private readonly svg: d3.Selection<SVGSVGElement, unknown, null, undefined>;
     private readonly chartContainer: d3.Selection<SVGGElement, unknown, null, undefined>;
     private readonly statusRegion: HTMLDivElement;
@@ -165,6 +185,9 @@ export class Visual implements IVisual {
     private foreground: string;
     private background: string;
     private selectionColor: string;
+    private readonly tooltipTimers = new Map<Element, number>();
+    private readonly pointerTooltipElements = new WeakSet<Element>();
+    private readonly activeTooltipElements = new WeakSet<Element>();
 
     constructor(options?: VisualConstructorOptions) {
         if (!options) throw new Error("Visual constructor options are required.");
@@ -172,8 +195,25 @@ export class Visual implements IVisual {
         this.host = options.host;
         this.eventService = options.host.eventService;
         this.selectionManager = options.host.createSelectionManager();
-        this.formattingSettingsService = new FormattingSettingsService();
+        const localizationManager = typeof this.host.createLocalizationManager === "function"
+            ? this.host.createLocalizationManager()
+            : undefined;
+        this.localizer = new VisualLocalizer(localizationManager);
+        this.formattingSettingsService = new FormattingSettingsService(localizationManager);
+        this.tooltipServiceWrapper = createTooltipServiceWrapper(this.host.tooltipService, this.target);
         this.formattingSettings = new VisualFormattingSettingsModel();
+        if (this.host.subSelectionService) {
+            this.subSelectionHelper = HtmlSubSelectionHelper.createHtmlSubselectionHelper({
+                hostElement: this.target,
+                subSelectionService: this.host.subSelectionService,
+                selectionIdCallback: element => this.getSelectionIds(this.getSourceIndices(element))[0]
+            });
+            this.visualOnObjectFormatting = {
+                getSubSelectionStyles: subSelections => this.getSubSelectionStyles(subSelections),
+                getSubSelectionShortcuts: () => undefined,
+                getSubSelectables: filter => this.subSelectionHelper?.getAllSubSelectables(filter)
+            };
+        }
 
         const palette = this.host.colorPalette;
         this.foreground = palette.foreground?.value ?? "#333333";
@@ -198,8 +238,8 @@ export class Visual implements IVisual {
             .classed("varianceChart", true)
             .classed("high-contrast", palette.isHighContrast === true)
             .attr("role", "group")
-            .attr("aria-label", "Atlyn Variance Chart")
-            .attr("aria-description", "Interactive variance analysis chart")
+            .attr("aria-label", this.localizer.get("visualName"))
+            .attr("aria-description", this.localizer.get("chartDescription"))
             .attr("tabindex", 0);
 
         this.chartContainer = this.svg.append("g").classed("chartContainer", true);
@@ -222,14 +262,21 @@ export class Visual implements IVisual {
             this.renderUpdate(options);
         } catch {
             try {
-                this.renderFailure("The visual could not be rendered.");
+                this.renderFailure(this.localizer.get("renderError"));
             } catch {
-                this.announce("The visual could not be rendered.");
+                this.announce(this.localizer.get("renderError"));
             }
             this.eventService.renderingFailed(options, "Unable to render the visual.");
             return;
         }
         this.eventService.renderingFinished(options);
+    }
+
+    public destroy(): void {
+        for (const timer of this.tooltipTimers.values()) window.clearTimeout(timer);
+        this.tooltipTimers.clear();
+        this.tooltipServiceWrapper.hide();
+        this.subSelectionHelper?.destroy();
     }
 
     private renderUpdate(options: VisualUpdateOptions): void {
@@ -254,7 +301,7 @@ export class Visual implements IVisual {
             return;
         }
         if (!this.parsedData.hasActual) {
-            this.renderNoData("Add at least one finite Actual value.");
+            this.renderNoData(this.localizer.get("noActual"));
             return;
         }
 
@@ -267,7 +314,7 @@ export class Visual implements IVisual {
             if (available) {
                 comparisonType = available;
             } else if (["variance", "waterfall", "lollipop", "dot"].includes(chartType)) {
-                this.renderNoData("Add Plan, Previous Year, or Forecast for variance analysis.");
+                this.renderNoData(this.localizer.get("addComparison"));
                 return;
             }
         }
@@ -286,6 +333,7 @@ export class Visual implements IVisual {
             this.renderNoData("Top N settings exclude all categories.");
             return;
         }
+        this.reportDataWarnings(this.parsedData, comparisonType, chartType);
 
         const viewportWidth = finiteDimension(options.viewport.width);
         const viewportHeight = finiteDimension(options.viewport.height);
@@ -316,6 +364,11 @@ export class Visual implements IVisual {
 
         this.decorateRenderedContent();
         this.addInteractivity(comparisonType);
+        this.subSelectionHelper?.setFormatMode(options.formatMode === true);
+        this.decorateOnObjectElements(options.formatMode === true);
+        if (options.formatMode === true && this.subSelectionHelper) {
+            this.subSelectionHelper.updateOutlinesFromSubSelections(options.subSelections ?? [], true);
+        }
         if (this.getInteractionMode() === "highlight") {
             this.syncSelectionState(this.selectionManager.getSelectionIds().filter(isVisualSelectionId));
         } else {
@@ -326,6 +379,9 @@ export class Visual implements IVisual {
     private resetCanvas(width: number, height: number): void {
         const safeWidth = finiteDimension(width);
         const safeHeight = finiteDimension(height);
+        for (const timer of this.tooltipTimers.values()) window.clearTimeout(timer);
+        this.tooltipTimers.clear();
+        this.host.tooltipService.hide({ immediately: true, isTouchEvent: false });
         this.chartContainer.selectAll("*").remove();
         this.svg.selectAll(".clear-selection-btn").remove();
         this.chartContainer.attr("transform", null);
@@ -335,7 +391,7 @@ export class Visual implements IVisual {
             .attr("height", safeHeight)
             .attr("viewBox", null)
             .attr("tabindex", 0)
-            .attr("aria-label", "Atlyn Variance Chart");
+            .attr("aria-label", this.localizer.get("visualName"));
         this.selectionIds = [];
         this.parsedData = null;
         this.statusRegion.textContent = "";
@@ -403,6 +459,7 @@ export class Visual implements IVisual {
         this.target.style.setProperty("--atlyn-foreground", this.foreground);
         this.target.style.setProperty("--atlyn-background", this.background);
         this.target.style.setProperty("--atlyn-selection", this.selectionColor);
+        this.svg.classed("high-contrast", palette.isHighContrast === true);
     }
 
     private getChartType(): ChartType {
@@ -540,6 +597,7 @@ export class Visual implements IVisual {
                     ? this.foreground
                     : this.formattingSettings.commentBoxCard.markerColor.value.value
             },
+            labels: this.getChartLabels(),
             highlighting: {
                 show: this.formattingSettings.differenceHighlightingCard.show.value,
                 threshold: finiteSetting(
@@ -560,11 +618,79 @@ export class Visual implements IVisual {
                     Number.MAX_VALUE
                 )
             },
+            referenceLine: {
+                show: this.formattingSettings.referenceLineCard.show.value,
+                label: this.formattingSettings.referenceLineCard.displayNameProperty.value || "Reference line",
+                value: finiteSetting(
+                    this.formattingSettings.referenceLineCard.value.value,
+                    0,
+                    -Number.MAX_VALUE,
+                    Number.MAX_VALUE
+                ),
+                color: this.host.colorPalette.isHighContrast
+                    ? this.foreground
+                    : this.formattingSettings.referenceLineCard.color.value.value,
+                style: enumSetting(
+                    this.formattingSettings.referenceLineCard.style.value.value,
+                    ["solid", "dashed", "dotted"],
+                    "dashed"
+                )
+            },
             showVarianceLabels: labels.showVariance.value,
             showPercentage: labels.showPercentage.value,
             fontSize: finiteSetting(labels.fontSize.value, 10, 0, 200),
             fontColor: this.foreground
         };
+    }
+
+    private getChartLabels(): ChartLabels {
+        const labels = this.localizer.all();
+        return {
+            actual: labels.actual,
+            plan: labels.plan,
+            previousYear: labels.previousYear,
+            forecast: labels.forecast,
+            positiveVariance: labels.positiveVariance,
+            negativeVariance: labels.negativeVariance,
+            varianceTo: labels.varianceTo,
+            comments: labels.comments,
+            noComparison: labels.noComparison
+        };
+    }
+
+    private reportDataWarnings(
+        data: ParsedData,
+        comparisonType: ComparisonType,
+        chartType: ChartType
+    ): void {
+        if (typeof this.host.displayWarningIcon !== "function") return;
+
+        if (chartType === "columnStacked" && this.hasComparisonData(data, comparisonType)) {
+            this.host.displayWarningIcon(
+                this.localizer.get("scenarioGroupedTitle"),
+                this.localizer.get("scenarioGroupedMessage")
+            );
+            return;
+        }
+
+        if (this.dataView?.metadata?.segment || data.dataPoints.length >= 1000) {
+            this.host.displayWarningIcon(
+                this.localizer.get("dataReducedTitle"),
+                this.localizer.get("dataReducedMessage")
+            );
+            return;
+        }
+
+        const hasZeroComparison = data.dataPoints.some(point =>
+            point.actual !== null
+            && getComparisonValue(point, comparisonType) === 0
+        );
+        if (hasZeroComparison) {
+            this.host.displayWarningIcon(
+                this.localizer.get("zeroBaseTitle"),
+                this.localizer.get("zeroBaseMessage")
+            );
+        }
     }
 
     private applyResponsiveSettings(settings: ChartSettings, breakpoint: string): void {
@@ -576,6 +702,7 @@ export class Visual implements IVisual {
             settings.categories.fontSize = Math.min(settings.categories.fontSize, 8);
             settings.categories.rotation = -90;
             settings.axisBreak.show = false;
+            if (settings.referenceLine) settings.referenceLine.show = false;
         } else if (breakpoint === "medium") {
             settings.legend.show = false;
             settings.commentBox.show = false;
@@ -787,7 +914,7 @@ export class Visual implements IVisual {
             .attr("height", height);
         const scroll = box.append("xhtml:div")
             .attr("role", "region")
-            .attr("aria-label", "Chart comments")
+            .attr("aria-label", this.localizer.get("comments"))
             .attr("tabindex", 0)
             .style("width", `${width}px`)
             .style("height", `${height}px`)
@@ -869,22 +996,25 @@ export class Visual implements IVisual {
             color: settings.colors[settings.comparisonType],
             outlined: true
         } : null;
-        const actual = { label: "Actual", color: settings.colors.actual };
+        const actual = { label: this.localizer.get("actual"), color: settings.colors.actual };
         const variance = [
-            { label: "+Variance", color: settings.colors.positiveVariance },
-            { label: "−Variance", color: settings.colors.negativeVariance }
+            { label: this.localizer.get("positiveVariance"), color: settings.colors.positiveVariance },
+            { label: this.localizer.get("negativeVariance"), color: settings.colors.negativeVariance }
         ];
 
         if (chartType === "line" || chartType === "area" || chartType === "combo") {
             const comparisons: Array<{ label: string; color: string }> = [];
             if (this.parsedData?.hasBudget) {
-                comparisons.push({ label: "Plan", color: settings.colors.budget });
+                comparisons.push({ label: this.localizer.get("plan"), color: settings.colors.budget });
             }
             if (this.parsedData?.hasPreviousYear) {
-                comparisons.push({ label: "Previous Year", color: settings.colors.previousYear });
+                comparisons.push({
+                    label: this.localizer.get("previousYear"),
+                    color: settings.colors.previousYear
+                });
             }
             if (this.parsedData?.hasForecast) {
-                comparisons.push({ label: "Forecast", color: settings.colors.forecast });
+                comparisons.push({ label: this.localizer.get("forecast"), color: settings.colors.forecast });
             }
             return [actual, ...comparisons];
         }
@@ -975,10 +1105,7 @@ export class Visual implements IVisual {
                 this.formattingSettings.interactionCard.enableTooltips.value
                 && this.host.tooltipService.enabled()
             ) {
-                d3.select(element)
-                    .on("mouseover", (event: MouseEvent) => this.showTooltip(event, point, sourceIndices, comparisonType))
-                    .on("mousemove", (event: MouseEvent) => this.moveTooltip(event, point, sourceIndices, comparisonType))
-                    .on("mouseout", () => this.host.tooltipService.hide({ immediately: true, isTouchEvent: false }));
+                this.bindTooltip(element, point, sourceIndices, comparisonType);
             }
         });
 
@@ -1031,7 +1158,7 @@ export class Visual implements IVisual {
         if (!point) return;
         if (this.getInteractionMode() === "filter") {
             if (this.applyCrossFilter(sourceIndices, multiSelect)) {
-                this.announce(`${point.category} filter updated.`);
+                this.announce(`${point.category} ${this.localizer.get("filterUpdated")}`);
             }
             return;
         }
@@ -1041,7 +1168,7 @@ export class Visual implements IVisual {
         this.selectionManager.select(ids.length === 1 ? ids[0] : ids, multiSelect).then(
             selected => {
                 this.syncSelectionState(selected.filter(isVisualSelectionId));
-                this.announce(`${point.category} selected.`);
+                this.announce(`${point.category} ${this.localizer.get("selected")}`);
             },
             () => this.announceInteractionError()
         );
@@ -1063,7 +1190,7 @@ export class Visual implements IVisual {
         this.selectionManager.clear().then(
             () => {
                 this.syncSelectionState([]);
-                this.announce("Selection cleared.");
+                this.announce(this.localizer.get("selectionCleared"));
             },
             () => this.announceInteractionError()
         );
@@ -1098,7 +1225,7 @@ export class Visual implements IVisual {
         if (!this.applyFilterState(new Map())) return;
         this.filterTuples.clear();
         this.syncFilterState();
-        this.announce("Filter cleared.");
+        this.announce(this.localizer.get("filterCleared"));
     }
 
     private applyFilterState(state: Map<string, FilterTuple>): boolean {
@@ -1269,24 +1396,26 @@ export class Visual implements IVisual {
     }
 
     private applyInteractionState(hasSelection: boolean, isSelected: (element: Element) => boolean): void {
-        if (!this.allowInteractions() || !this.formattingSettings.interactionCard.enableSelection.value) {
-            this.chartContainer.selectAll<SVGElement, unknown>("[data-source-indices]").each((_, index, nodes) => {
-                const element = nodes[index];
-                element.style.opacity = "1";
-                element.classList.remove("host-selected");
-                element.removeAttribute("aria-pressed");
-            });
-            this.svg.selectAll(".clear-selection-btn").remove();
-            return;
-        }
+        const selectionEnabled = this.allowInteractions()
+            && this.formattingSettings.interactionCard.enableSelection.value;
+        const hasHighlights = this.parsedData?.hasHighlights === true;
         this.chartContainer.selectAll<SVGElement, unknown>("[data-source-indices]").each((_, index, nodes) => {
             const element = nodes[index];
-            const selected = hasSelection && isSelected(element);
-            element.style.opacity = !hasSelection || selected ? "1" : "0.3";
+            const point = this.getDataPoint(this.getSourceIndices(element));
+            const highlighted = !hasHighlights || point?.highlighted === true;
+            const selected = selectionEnabled && hasSelection && isSelected(element);
+            const dimmed = (hasHighlights && !highlighted) || (hasSelection && selectionEnabled && !selected);
+            element.style.opacity = dimmed ? "0.3" : "1";
             element.classList.toggle("host-selected", selected);
-            element.setAttribute("aria-pressed", selected ? "true" : "false");
+            element.classList.toggle("host-highlighted", hasHighlights && highlighted);
+            element.classList.toggle("host-highlight-dimmed", hasHighlights && !highlighted);
+            if (selectionEnabled) {
+                element.setAttribute("aria-pressed", selected ? "true" : "false");
+            } else {
+                element.removeAttribute("aria-pressed");
+            }
         });
-        if (hasSelection) this.renderClearSelectionButton();
+        if (selectionEnabled && hasSelection) this.renderClearSelectionButton();
         else this.svg.selectAll(".clear-selection-btn").remove();
     }
 
@@ -1305,7 +1434,7 @@ export class Visual implements IVisual {
         const button = this.svg.append("g")
             .attr("class", "clear-selection-btn visual-control")
             .attr("role", "button")
-            .attr("aria-label", "Clear selection")
+            .attr("aria-label", this.localizer.get("clearSelection"))
             .attr("tabindex", 0)
             .attr("transform", "translate(8, 8)")
             .on("click", (event: MouseEvent) => {
@@ -1332,48 +1461,160 @@ export class Visual implements IVisual {
             .text("×");
     }
 
-    private showTooltip(
-        event: MouseEvent,
+    private bindTooltip(
+        element: SVGElement,
         point: DataPoint,
         sourceIndices: number[],
         comparisonType: ComparisonType
+    ): void {
+        const selection = d3.select(element);
+        if (sourceIndices.length === 1) {
+            this.tooltipServiceWrapper.addTooltip(
+                selection.datum(point),
+                () => this.buildTooltipForDataPoint(point, comparisonType),
+                () => this.getSelectionIds(sourceIndices)[0],
+                true
+            );
+            selection
+                .on("pointerover.atlynTooltipGuard", () => {
+                    this.pointerTooltipElements.add(element);
+                })
+                .on("pointerout.atlynTooltipGuard", () => {
+                    this.pointerTooltipElements.delete(element);
+                });
+        }
+        selection
+            .on("pointerover.atlynTooltip", (event: PointerEvent) => {
+                if (sourceIndices.length === 1) return;
+                this.pointerTooltipElements.add(element);
+                this.scheduleTooltip(
+                    element,
+                    event,
+                    event.pointerType === "touch",
+                    point,
+                    sourceIndices,
+                    comparisonType
+                );
+            })
+            .on("pointermove.atlynTooltip", (event: PointerEvent) => {
+                if (sourceIndices.length === 1) return;
+                if (event.pointerType !== "mouse" || !this.activeTooltipElements.has(element)) return;
+                this.moveTooltip(event, point, sourceIndices, comparisonType, false);
+            })
+            .on("pointerout.atlynTooltip", (event: PointerEvent) => {
+                if (sourceIndices.length === 1) return;
+                this.hideTooltip(element, event.pointerType === "touch");
+                this.pointerTooltipElements.delete(element);
+            })
+            .on("mouseover.atlynTooltip", (event: MouseEvent) => {
+                // Keep compatibility with older embedded hosts and test environments
+                // that expose mouse events but do not dispatch PointerEvent.
+                if (this.pointerTooltipElements.has(element)) return;
+                this.scheduleTooltip(element, event, false, point, sourceIndices, comparisonType);
+            })
+            .on("mousemove.atlynTooltip", (event: MouseEvent) => {
+                if (sourceIndices.length === 1 && this.pointerTooltipElements.has(element)) return;
+                if (this.pointerTooltipElements.has(element) || !this.activeTooltipElements.has(element)) return;
+                this.moveTooltip(event, point, sourceIndices, comparisonType, false);
+            })
+            .on("mouseout.atlynTooltip", () => {
+                if (sourceIndices.length === 1 && this.pointerTooltipElements.has(element)) return;
+                if (!this.pointerTooltipElements.has(element)) this.hideTooltip(element, false);
+            });
+    }
+
+    private scheduleTooltip(
+        element: Element,
+        event: MouseEvent | PointerEvent,
+        isTouchEvent: boolean,
+        point: DataPoint,
+        sourceIndices: number[],
+        comparisonType: ComparisonType
+    ): void {
+        this.cancelTooltipTimer(element);
+        if (!isTouchEvent) {
+            this.activeTooltipElements.add(element);
+            this.showTooltip(event, point, sourceIndices, comparisonType, false);
+            return;
+        }
+
+        const timer = window.setTimeout(() => {
+            this.tooltipTimers.delete(element);
+            this.activeTooltipElements.add(element);
+            this.showTooltip(event, point, sourceIndices, comparisonType, true);
+        }, 500);
+        this.tooltipTimers.set(element, timer);
+    }
+
+    private cancelTooltipTimer(element: Element): void {
+        const timer = this.tooltipTimers.get(element);
+        if (timer === undefined) return;
+        window.clearTimeout(timer);
+        this.tooltipTimers.delete(element);
+    }
+
+    private hideTooltip(element: Element, isTouchEvent: boolean): void {
+        this.cancelTooltipTimer(element);
+        if (!this.activeTooltipElements.has(element)) return;
+        this.activeTooltipElements.delete(element);
+        this.host.tooltipService.hide({ immediately: isTouchEvent, isTouchEvent });
+    }
+
+    private showTooltip(
+        event: MouseEvent | PointerEvent,
+        point: DataPoint,
+        sourceIndices: number[],
+        comparisonType: ComparisonType,
+        isTouchEvent: boolean
     ): void {
         this.host.tooltipService.show({
             dataItems: this.buildTooltipForDataPoint(point, comparisonType),
             identities: this.getSelectionIds(sourceIndices),
             coordinates: [event.clientX, event.clientY],
-            isTouchEvent: false
+            isTouchEvent
         });
     }
 
     private moveTooltip(
-        event: MouseEvent,
+        event: MouseEvent | PointerEvent,
         point: DataPoint,
         sourceIndices: number[],
-        comparisonType: ComparisonType
+        comparisonType: ComparisonType,
+        isTouchEvent: boolean
     ): void {
         this.host.tooltipService.move({
             dataItems: this.buildTooltipForDataPoint(point, comparisonType),
             identities: this.getSelectionIds(sourceIndices),
             coordinates: [event.clientX, event.clientY],
-            isTouchEvent: false
+            isTouchEvent
         });
     }
 
     private buildTooltipForDataPoint(point: DataPoint, comparisonType: ComparisonType): VisualTooltipDataItem[] {
         const comparisonLabel = this.getComparisonLabel(comparisonType);
         const { variance, percentage } = this.getDisplayedVariance(point, comparisonType);
-        const items: VisualTooltipDataItem[] = [{ displayName: "Category", value: point.category }];
+        const items: VisualTooltipDataItem[] = [{
+            displayName: this.localizer.get("category"),
+            value: point.category
+        }];
         if (point.actual !== null) {
             items.push({
-                displayName: "Actual",
+                displayName: this.localizer.get("actual"),
                 value: this.formatModelMeasure(point.actual, "actual")
             });
         }
         const comparisons: Array<{ type: ComparisonType; label: string; available: boolean }> = [
-            { type: "budget", label: "Plan", available: this.parsedData?.hasBudget === true },
-            { type: "previousYear", label: "Previous Year", available: this.parsedData?.hasPreviousYear === true },
-            { type: "forecast", label: "Forecast", available: this.parsedData?.hasForecast === true }
+            { type: "budget", label: this.localizer.get("plan"), available: this.parsedData?.hasBudget === true },
+            {
+                type: "previousYear",
+                label: this.localizer.get("previousYear"),
+                available: this.parsedData?.hasPreviousYear === true
+            },
+            {
+                type: "forecast",
+                label: this.localizer.get("forecast"),
+                available: this.parsedData?.hasForecast === true
+            }
         ];
         for (const comparison of comparisons) {
             const value = getComparisonValue(point, comparison.type);
@@ -1385,17 +1626,22 @@ export class Visual implements IVisual {
             }
         }
         if (variance !== null) {
+            const varianceText = this.formatModelMeasure(variance, "actual", true);
+            const percentageText = percentage === null
+                && getComparisonValue(point, comparisonType) === 0
+                ? `${varianceText} (N/A)`
+                : percentage === null
+                    ? varianceText
+                    : `${varianceText} (${formatPercent(percentage, 1, true, this.host.locale)})`;
             items.push({
-                displayName: `Variance to ${comparisonLabel}`,
-                value: percentage === null
-                    ? this.formatModelMeasure(variance, "actual", true)
-                    : `${this.formatModelMeasure(variance, "actual", true)} (${formatPercent(percentage, 1, true, this.host.locale)})`
+                displayName: `${this.localizer.get("varianceTo")} ${comparisonLabel}`,
+                value: percentageText
             });
         }
         if (point.tooltipFields) {
             items.push(...point.tooltipFields.map(field => ({ displayName: field.displayName, value: field.value })));
         }
-        if (point.comment) items.push({ displayName: "Comment", value: point.comment });
+        if (point.comment) items.push({ displayName: this.localizer.get("comments"), value: point.comment });
         return items;
     }
 
@@ -1448,12 +1694,20 @@ export class Visual implements IVisual {
         const comparisonLabel = this.getComparisonLabel(comparisonType);
         const parts = [point.group ? `${point.group}, ${point.category}` : point.category];
         if (point.actual !== null) {
-            parts.push(`Actual ${this.formatModelMeasure(point.actual, "actual")}`);
+            parts.push(`${this.localizer.get("actual")} ${this.formatModelMeasure(point.actual, "actual")}`);
         }
         const comparisons: Array<{ type: ComparisonType; label: string; available: boolean }> = [
-            { type: "budget", label: "Plan", available: this.parsedData?.hasBudget === true },
-            { type: "previousYear", label: "Previous Year", available: this.parsedData?.hasPreviousYear === true },
-            { type: "forecast", label: "Forecast", available: this.parsedData?.hasForecast === true }
+            { type: "budget", label: this.localizer.get("plan"), available: this.parsedData?.hasBudget === true },
+            {
+                type: "previousYear",
+                label: this.localizer.get("previousYear"),
+                available: this.parsedData?.hasPreviousYear === true
+            },
+            {
+                type: "forecast",
+                label: this.localizer.get("forecast"),
+                available: this.parsedData?.hasForecast === true
+            }
         ];
         for (const comparison of comparisons) {
             const value = getComparisonValue(point, comparison.type);
@@ -1462,8 +1716,14 @@ export class Visual implements IVisual {
             }
         }
         const { variance, percentage } = this.getDisplayedVariance(point, comparisonType);
-        if (variance !== null) parts.push(`Variance to ${comparisonLabel} ${this.formatModelMeasure(variance, "actual", true)}`);
+        if (variance !== null) {
+            parts.push(
+                `${this.localizer.get("varianceTo")} ${comparisonLabel} `
+                + this.formatModelMeasure(variance, "actual", true)
+            );
+        }
         if (percentage !== null) parts.push(formatPercent(percentage, 1, true, this.host.locale));
+        else if (variance !== null && getComparisonValue(point, comparisonType) === 0) parts.push("N/A");
         return parts.join(". ");
     }
 
@@ -1559,17 +1819,58 @@ export class Visual implements IVisual {
 
     private decorateRenderedContent(): void {
         this.chartContainer
-            .selectAll(".x-axis, .y-axis, .legend, .chart-title, .axis-break-indicator, .synthetic-total")
+            .selectAll(".x-axis, .y-axis, .legend, .chart-title, .axis-break-indicator, .reference-line, .synthetic-total")
             .attr("aria-hidden", "true");
         this.chartContainer.selectAll(".legend text").attr("fill", this.foreground);
         this.chartContainer.selectAll(".comment-box").style("color", this.foreground);
         this.chartContainer.selectAll("line").attr("aria-hidden", "true");
     }
 
+    private decorateOnObjectElements(formatMode: boolean): void {
+        const title = this.chartContainer.selectAll<SVGElement, unknown>(".chart-title");
+        title
+            .classed(HtmlSubSelectableClass, formatMode)
+            .attr(SubSelectableObjectNameAttribute, "title")
+            .attr(SubSelectableDisplayNameAttribute, "Title")
+            .attr(SubSelectableTypeAttribute, "3");
+
+        const dataPoints = this.chartContainer.selectAll<SVGElement, unknown>(".logical-data-point");
+        dataPoints
+            .classed(HtmlSubSelectableClass, formatMode)
+            .attr(SubSelectableObjectNameAttribute, "design")
+            .attr(SubSelectableDisplayNameAttribute, "Data point")
+            .attr(SubSelectableTypeAttribute, "3");
+    }
+
+    private getSubSelectionStyles(
+        subSelections: powerbi.visuals.CustomVisualSubSelection[]
+    ): powerbi.visuals.SubSelectionStyles | undefined {
+        const objectName = subSelections[0]?.customVisualObjects[0]?.objectName;
+        if (objectName === "title") {
+            return {
+                type: 3,
+                fill: {
+                    label: "Title color",
+                    reference: { objectName: "title", propertyName: "fontColor" }
+                }
+            };
+        }
+        if (objectName === "design") {
+            return {
+                type: 3,
+                fill: {
+                    label: "Actual color",
+                    reference: { objectName: "design", propertyName: "actualColor" }
+                }
+            };
+        }
+        return undefined;
+    }
+
     private decorateCommentRegions(): void {
         this.target.querySelectorAll<HTMLElement>(".comment-box > div").forEach(region => {
             region.setAttribute("role", "region");
-            region.setAttribute("aria-label", "Chart comments");
+            region.setAttribute("aria-label", this.localizer.get("comments"));
             region.setAttribute("tabindex", "0");
             region.style.color = this.foreground;
             region.style.backgroundColor = this.background;
@@ -1584,7 +1885,7 @@ export class Visual implements IVisual {
         const button = this.chartContainer.append("g")
             .attr("class", "drill-up-button visual-control")
             .attr("role", "button")
-            .attr("aria-label", "Drill up")
+            .attr("aria-label", this.localizer.get("drillUp"))
             .attr("tabindex", 0)
             .style("cursor", "pointer")
             .on("click", () => this.triggerDrill(DRILL_UP))
@@ -1594,7 +1895,7 @@ export class Visual implements IVisual {
                     this.triggerDrill(DRILL_UP);
                 }
             });
-        button.append("text").attr("fill", this.selectionColor).text("↑ Drill Up");
+        button.append("text").attr("fill", this.selectionColor).text(`↑ ${this.localizer.get("drillUp")}`);
     }
 
     private activateDrillPoint(sourceIndices: number[]): void {
@@ -1643,15 +1944,17 @@ export class Visual implements IVisual {
     }
 
     private getComparisonLabel(comparisonType: ComparisonType): string {
-        if (comparisonType === "previousYear") return "Previous Year";
-        if (comparisonType === "forecast") return "Forecast";
-        return "Plan";
+        if (comparisonType === "previousYear") return this.localizer.get("previousYear");
+        if (comparisonType === "forecast") return this.localizer.get("forecast");
+        return this.localizer.get("plan");
     }
 
     private renderLandingPage(): void {
         const width = finiteDimension(Number(this.svg.attr("width")));
         const height = finiteDimension(Number(this.svg.attr("height")));
-        this.svg.classed("landing", true).attr("aria-label", "Atlyn Variance Chart. Add data to begin.");
+        this.svg
+            .classed("landing", true)
+            .attr("aria-label", `${this.localizer.get("visualName")}. ${this.localizer.get("addData")}`);
         const group = this.chartContainer.append("g").attr("aria-hidden", "true");
         group.append("rect")
             .attr("width", width)
@@ -1664,20 +1967,20 @@ export class Visual implements IVisual {
             .attr("fill", this.foreground)
             .attr("font-size", "14px")
             .attr("font-weight", "bold")
-            .text("Atlyn Variance Chart");
+            .text(this.localizer.get("visualName"));
         group.append("text")
             .attr("x", width / 2)
             .attr("y", height / 2 + 14)
             .attr("text-anchor", "middle")
             .attr("fill", this.foreground)
             .attr("font-size", "11px")
-            .text("Add Category and Actual fields to start");
+            .text(this.localizer.get("addActual"));
     }
 
     private renderNoData(message: string): void {
         const width = finiteDimension(Number(this.svg.attr("width")));
         const height = finiteDimension(Number(this.svg.attr("height")));
-        this.svg.attr("aria-label", `Atlyn Variance Chart. ${message}`);
+        this.svg.attr("aria-label", `${this.localizer.get("visualName")}. ${message}`);
         this.chartContainer.append("text")
             .attr("x", width / 2)
             .attr("y", height / 2)
@@ -1689,7 +1992,9 @@ export class Visual implements IVisual {
 
     private renderFailure(message: string): void {
         this.chartContainer.selectAll("*").remove();
-        this.svg.attr("aria-label", `Atlyn Variance Chart error. ${message}`).attr("tabindex", 0);
+        this.svg
+            .attr("aria-label", `${this.localizer.get("visualName")} error. ${message}`)
+            .attr("tabindex", 0);
         const width = finiteDimension(Number(this.svg.attr("width")));
         const height = finiteDimension(Number(this.svg.attr("height")));
         this.chartContainer.append("rect")
@@ -1712,7 +2017,7 @@ export class Visual implements IVisual {
     }
 
     private announceInteractionError(): void {
-        this.announce("The interaction could not be completed.");
+        this.announce(this.localizer.get("interactionError"));
     }
 
     public getFormattingModel(): powerbi.visuals.FormattingModel {

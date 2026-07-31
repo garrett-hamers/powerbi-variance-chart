@@ -29,7 +29,7 @@ export class ColumnChart extends BaseChart {
         this.renderTitle();
 
         const series: Series[] = [
-            { key: "actual", color: this.settings.colors.actual, label: "Actual" }
+            { key: "actual", color: this.settings.colors.actual, label: this.getChartLabel("actual", "Actual") }
         ];
         const comparison = this.getComparisonPresentation();
         if (comparison) series.push(comparison);
@@ -52,9 +52,11 @@ export class ColumnChart extends BaseChart {
 
         this.renderXAxis(xScale, this.chartHeight, this.categoryLabels());
         this.renderYAxis(yScale);
-        if (this.stacked) {
+        if (this.stacked && !comparison) {
             this.renderStacked(dataPoints, series, xScale, yScale);
         } else {
+            // Scenario measures are alternatives, not additive components. Keep
+            // them grouped instead of implying that Actual + Plan is a total.
             this.renderGrouped(dataPoints, series, xScale, yScale);
         }
         this.renderCommentMarkers(xScale, yScale);

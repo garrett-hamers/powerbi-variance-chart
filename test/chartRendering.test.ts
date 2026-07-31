@@ -149,6 +149,24 @@ describe("Chart rendering - all types", () => {
 });
 
 describe("Cross-chart label and reference-marker behavior", () => {
+    it.each(["variance", "bar"] as const)("%s renders an analytics reference line", chartType => {
+        const data = sampleData();
+        const settings = defaultSettings({
+            referenceLine: {
+                show: true,
+                label: "Target",
+                value: 125,
+                color: "#0066cc",
+                style: "dashed"
+            }
+        });
+        createChart(chartType, container, data, settings, defaultDimensions()).render();
+        const line = container.select<SVGLineElement>(".reference-line");
+        expect(line.size()).toBe(1);
+        expect(line.attr("stroke")).toBe("#0066cc");
+        expect(line.attr("stroke-dasharray")).toBe("6,3");
+    });
+
     it.each(["combo", "dot"] as const)(
         "%s honors first-and-last label density",
         chartType => {
@@ -283,6 +301,19 @@ describe("Title rendering", () => {
 });
 
 describe("Comment rendering", () => {
+    it.each(["bar", "waterfall"] as const)("renders chart comment markers for %s", chartType => {
+        const data = sampleDataWithComments();
+        const settings = defaultSettings({
+            commentBox: {
+                ...defaultSettings().commentBox,
+                show: true
+            }
+        });
+        createChart(chartType, container, data, settings, defaultDimensions()).render();
+        expect(container.selectAll(".comment-marker").size()).toBe(2);
+        expect(container.selectAll(".comment-marker-text").size()).toBe(2);
+    });
+
     it("renders comment box when enabled with comments", () => {
         const data = sampleDataWithComments();
         const dims = defaultDimensions();
@@ -297,6 +328,7 @@ describe("Comment rendering", () => {
                 markerSize: 18, markerColor: "#1a73e8"
             }
         });
+
         const chart = createChart("variance", container, data, settings, dims);
         chart.render();
         const commentBox = container.selectAll(".comment-box");
@@ -465,6 +497,27 @@ describe("Comment rendering", () => {
             const color = el.style("color") || el.attr("fill");
             expect(color).not.toBeNull();
         });
+    });
+});
+
+describe("Horizontal category label constraints", () => {
+    it.each(["bar", "lollipop"] as const)("truncates long %s category labels", chartType => {
+        const data = parseDataView(buildMockDataView({
+            categories: ["A very long category label", "Another long category label"],
+            actual: [100, 200],
+            budget: [80, 220]
+        }))!;
+        const settings = defaultSettings({
+            categories: {
+                ...defaultSettings().categories,
+                maxWidth: 40
+            }
+        });
+        createChart(chartType, container, data, settings, defaultDimensions()).render();
+        const labels = Array.from(container.node()!.querySelectorAll(".y-axis text"));
+        expect(labels).toHaveLength(2);
+        expect(labels.every(label => (label.textContent ?? "").length < 28)).toBe(true);
+        expect(labels[0].getAttribute("data-full-label")).toBe("A very long category label");
     });
 });
 
@@ -803,9 +856,11 @@ describe("Edge cases", () => {
 
             const totals = container.selectAll(".synthetic-total").nodes() as SVGPathElement[];
             const actualTotal = totals[totals.length - 1];
-            const actualY = Number(actualTotal.getAttribute("d")!.match(/^M[^,]+,([^ ]+)/)![1]);
+            const actualPath = actualTotal.getAttribute("d")!;
+            const actualMatch = actualPath.match(/^M[^,]+,([^ ]+) H[^ ]+ V([^ ]+)/)!;
+            const actualYs = [Number(actualMatch[1]), Number(actualMatch[2])];
 
-            expect(Math.abs(connectorY - actualY)).toBeLessThan(0.001);
+            expect(actualYs.some(y => Math.abs(connectorY - y) < 0.001)).toBe(true);
         }
     });
 
@@ -880,7 +935,7 @@ describe("DOM limitations awareness", () => {
             expect(container.selectAll(".x-axis .tick").size()).toBe(3);
         });
 
-        it("uses separate positive/negative stack accumulators and keeps both extents visible", () => {
+        it("keeps scenario comparisons grouped instead of stacking non-additive values", () => {
             const data = parseDataView(buildMockDataView({
                 categories: ["Mixed"],
                 actual: [100],
@@ -889,11 +944,9 @@ describe("DOM limitations awareness", () => {
             createChart("columnStacked", container, data, defaultSettings(), defaultDimensions()).render();
             const rects = container.selectAll("rect[data-dp-index]").nodes() as SVGRectElement[];
             expect(rects).toHaveLength(2);
-            const firstBottom = Number(rects[0].getAttribute("y")) + Number(rects[0].getAttribute("height"));
-            const secondTop = Number(rects[1].getAttribute("y"));
-            expect(firstBottom).toBeCloseTo(secondTop, 5);
             expect(Number(rects[0].getAttribute("height"))).toBeGreaterThan(0);
             expect(Number(rects[1].getAttribute("height"))).toBeGreaterThan(0);
+            expect(rects[0].getAttribute("x")).not.toBe(rects[1].getAttribute("x"));
         });
 
         it("contains overflowing stacked totals without emitting infinite geometry", () => {
