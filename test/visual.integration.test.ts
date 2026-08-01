@@ -28,6 +28,7 @@ interface HostHarness {
     applyJsonFilter: ReturnType<typeof vi.fn>;
     tooltipShow: ReturnType<typeof vi.fn>;
     drill: ReturnType<typeof vi.fn>;
+    displayWarningIcon: ReturnType<typeof vi.fn>;
     selectedIds: ISelectionId[];
     rejectSelection: boolean;
     rejectClear: boolean;
@@ -78,6 +79,7 @@ function createHostHarness(options: {
     });
     const tooltipShow = vi.fn();
     const drill = vi.fn();
+    const displayWarningIcon = vi.fn();
 
     const selectionManager = {
         select,
@@ -146,6 +148,7 @@ function createHostHarness(options: {
     harness.applyJsonFilter = applyJsonFilter;
     harness.tooltipShow = tooltipShow;
     harness.drill = drill;
+    harness.displayWarningIcon = displayWarningIcon;
     harness.host = {
         createSelectionIdBuilder,
         createSelectionManager: () => selectionManager,
@@ -164,7 +167,8 @@ function createHostHarness(options: {
         hostCapabilities: { allowInteractions: options.allowInteractions ?? true },
         locale: options.locale ?? "en-US",
         applyJsonFilter,
-        drill
+        drill,
+        displayWarningIcon
     } as IVisualHost;
     return harness;
 }
@@ -441,6 +445,7 @@ describe("Visual host integration", () => {
             groups: ["Small", "Small", "Large", "Large"],
             actual: [10, -5, 10_000, -5_000]
         });
+
         setObjects(view, {
             chartSettings: { chartType: "column" },
             smallMultiples: { scaleMode: "independent" }
@@ -459,6 +464,68 @@ describe("Visual host integration", () => {
         const sharedSmall = Number(firstPoint(element, "0").getAttribute("height"));
         const sharedLarge = Number(firstPoint(element, "2").getAttribute("height"));
         expect(sharedSmall / 10).toBeCloseTo(sharedLarge / 10_000, 5);
+    });
+
+    it("labels each small-multiple cell as an accessible group", () => {
+        const view = dataView({
+            categories: ["A", "A"],
+            groups: ["East", "West"],
+            actual: [10, 20],
+            budget: [8, 18]
+        });
+        visual.update(updateOptions(view, 800, 450));
+        const groups = Array.from(
+            element.querySelectorAll<SVGElement>(".chartContainer > svg[role='group']"),
+            node => node.getAttribute("aria-label")
+        );
+        expect(groups).toEqual(["East", "West"]);
+    });
+
+    it("does not warn for an exact complete 1,000-row data view", () => {
+        const count = 1000;
+        const view = dataView({
+            categories: Array.from({ length: count }, (_, index) => `C${index}`),
+            actual: Array.from({ length: count }, (_, index) => index + 1),
+            budget: Array.from({ length: count }, (_, index) => index)
+        });
+        setObjects(view, { topN: { enable: true, count: 1, showOthers: true } });
+        visual.update(updateOptions(view));
+        expect(harness.displayWarningIcon).not.toHaveBeenCalled();
+        expect(element.querySelector("[data-source-indices*=',']")).not.toBeNull();
+    });
+
+    it("warns for host-reduced data and suppresses an incomplete Others aggregate", () => {
+        const view = dataView({
+            categories: ["A", "B", "C"],
+            actual: [30, 20, 10],
+            budget: [25, 18, 9]
+        });
+        view.metadata.segment = {};
+        setObjects(view, { topN: { enable: true, count: 1, showOthers: true } });
+        visual.update(updateOptions(view));
+        expect(harness.displayWarningIcon).toHaveBeenCalledWith(
+            "Data reduction applied",
+            expect.stringContaining("Power BI reduced")
+        );
+        expect(element.querySelector("[data-source-indices='1,2']")).toBeNull();
+    });
+
+    it("suppresses Others when the author marks a measure non-additive", () => {
+        const view = dataView({
+            categories: ["A", "B", "C"],
+            actual: [30, 20, 10],
+            budget: [25, 18, 9]
+        });
+        setObjects(view, {
+            topN: {
+                enable: true,
+                count: 1,
+                aggregation: "nonAdditive",
+                showOthers: true
+            }
+        });
+        visual.update(updateOptions(view));
+        expect(element.querySelector("[data-source-indices*=',']")).toBeNull();
     });
 
     it("passes point identity to point context menus and {} to background and aggregate menus", () => {
@@ -769,10 +836,11 @@ describe("Visual host integration", () => {
         visual.update(updateOptions(view));
         const point = firstPoint(element);
         expect(point.getAttribute("aria-label")).toContain("Plan");
-        expect(point.getAttribute("aria-label")).not.toMatch(/Actual|Variance|—/);
+        expect(point.getAttribute("aria-label")).not.toMatch(/Actual|—/);
+        expect(point.getAttribute("aria-label")).toContain("Variance unavailable");
         point.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
         const items = harness.tooltipShow.mock.calls[0][0].dataItems as Array<{ displayName: string }>;
-        expect(items.map(item => item.displayName)).toEqual(["Category", "Plan"]);
+        expect(items.map(item => item.displayName)).toEqual(["Category", "Plan", "Variance to Plan"]);
     });
 
     it("shows only the Actual legend for grouped actual-only column data", () => {

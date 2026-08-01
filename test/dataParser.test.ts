@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
     parseDataView, applyTopN, getVariance, getVariancePct, getComparisonValue,
-    getAvailableComparisonType, getGroupKeys, DataPoint, ParsedData, TopNOptions, subsetParsedData
+    getAvailableComparisonType, getGroupKeys, getSemanticVariance, calculateSemanticVariance,
+    DataPoint, ParsedData, TopNOptions, subsetParsedData
 } from "../src/dataParser";
-import { formatModelValue, formatNumber, formatPrimitiveValue } from "../src/utils/formatting";
+import { formatModelValue, formatNumber, formatPrimitiveValue, formatVariance } from "../src/utils/formatting";
 import { buildMockDataView, buildEmptyDataView, buildCategoriesOnlyDataView } from "./helpers/mockDataView";
 
 // ── parseDataView ──
@@ -154,6 +155,15 @@ describe("parseDataView", () => {
         const result = parseDataView(dv)!;
         expect(result.totals.actual).toBe(60);
         expect(result.totals.budget).toBe(75);
+    });
+
+    it("marks either host reduction signal as partial", () => {
+        const segmented = buildMockDataView({ categories: ["A"], actual: [1] });
+        segmented.metadata.segment = {};
+        const reduced = buildMockDataView({ categories: ["A"], actual: [1] });
+        reduced.metadata.dataReduction = {};
+        expect(parseDataView(segmented)?.completeness?.state).toBe("partial");
+        expect(parseDataView(reduced)?.completeness?.state).toBe("partial");
     });
 
     it("tracks maxValue and minValue", () => {
@@ -379,6 +389,98 @@ describe("getVariance / getVariancePct / getComparisonValue", () => {
     });
 });
 
+describe("semantic variance engine", () => {
+    it.each([
+        {
+            name: "valid positive reference",
+            actual: 120,
+            reference: 100,
+            kind: "valid",
+            variance: 20,
+            percentage: 20
+        },
+        {
+            name: "valid negative reference",
+            actual: -80,
+            reference: -100,
+            kind: "valid",
+            variance: 20,
+            percentage: 20
+        },
+        {
+            name: "zero reference",
+            actual: 50,
+            reference: 0,
+            kind: "zeroReference",
+            variance: 50,
+            percentage: null
+        },
+        {
+            name: "missing reference",
+            actual: 50,
+            reference: null,
+            kind: "missing",
+            variance: null,
+            percentage: null
+        },
+        {
+            name: "non-finite actual",
+            actual: Number.POSITIVE_INFINITY,
+            reference: 10,
+            kind: "nonFinite",
+            variance: null,
+            percentage: null
+        }
+    ])("classifies $name without fabricating a percentage", testCase => {
+        const result = calculateSemanticVariance(testCase.actual, testCase.reference);
+        expect(result.kind).toBe(testCase.kind);
+        expect(result.variance).toBe(testCase.variance);
+        expect(result.percentage).toBe(testCase.percentage);
+        expect(result.aggregation).toBe("additive");
+        expect(result.direction).toBe("higherIsBetter");
+    });
+
+    it("preserves the documented formula while orienting lower-is-better metrics", () => {
+        const canonical = calculateSemanticVariance(80, 100);
+        const cost = calculateSemanticVariance(80, 100, {
+            aggregation: "additive",
+            direction: "lowerIsBetter"
+        });
+        expect(canonical).toMatchObject({
+            variance: -20,
+            percentage: -20,
+            outcome: "unfavorable"
+        });
+        expect(cost).toMatchObject({
+            variance: 20,
+            percentage: 20,
+            outcome: "favorable"
+        });
+    });
+
+    it("keeps every finite input result finite across representative signs", () => {
+        const values = [-1_000_000, -100, -1, 0, 1, 100, 1_000_000];
+        for (const actual of values) {
+            for (const reference of values) {
+                const result = calculateSemanticVariance(actual, reference);
+                if (result.variance !== null) expect(Number.isFinite(result.variance)).toBe(true);
+                if (result.percentage !== null) expect(Number.isFinite(result.percentage)).toBe(true);
+                expect(String(result.variance)).not.toMatch(/NaN|Infinity/);
+                expect(String(result.percentage)).not.toMatch(/NaN|Infinity/);
+            }
+        }
+    });
+
+    it("retains non-finite provenance after parser normalization", () => {
+        const data = parseDataView(buildMockDataView({
+            categories: ["A"],
+            actual: [Number.NaN],
+            budget: [10]
+        }))!;
+        expect(getSemanticVariance(data.dataPoints[0], "budget").kind).toBe("nonFinite");
+    });
+});
+
 // ── applyTopN ──
 
 describe("applyTopN", () => {
@@ -427,6 +529,33 @@ describe("applyTopN", () => {
         // Top 3 desc by actual: Cat5(500), Cat4(400), Cat3(300)
         // Others: Cat1(100) + Cat2(200) = 300
         expect(others.actual).toBe(300);
+    });
+
+    it("omits Others when the host data is partial", () => {
+        const data = makeData(5);
+        data.completeness = { state: "partial", reason: "hostDataReduction" };
+        const result = applyTopN(data, baseOpts);
+        expect(result.dataPoints.map(point => point.category)).toEqual(["Cat5", "Cat4", "Cat3"]);
+        expect(result.topNState).toEqual({
+            applied: true,
+            completeness: "partial",
+            others: "omittedPartial"
+        });
+    });
+
+    it("omits Others for non-additive measures", () => {
+        const result = applyTopN(makeData(5), { ...baseOpts, aggregation: "nonAdditive" });
+        expect(result.dataPoints).toHaveLength(3);
+        expect(result.topNState?.others).toBe("omittedNonAdditive");
+    });
+
+    it("marks a complete Others aggregate explicitly", () => {
+        const result = applyTopN(makeData(5), baseOpts);
+        expect(result.topNState).toEqual({
+            applied: true,
+            completeness: "complete",
+            others: "complete"
+        });
     });
 
     it("returns top N without Others when showOthers=false", () => {
@@ -544,5 +673,11 @@ describe("formatting resilience", () => {
             locale: "x",
             showSign: true
         })).not.toThrow();
+    });
+
+    it("never fabricates an unavailable percentage", () => {
+        expect(formatVariance(50, null, true)).toBe("+50.0");
+        expect(formatVariance(50, Number.NaN, true)).toBe("+50.0");
+        expect(formatVariance(50, 25, true)).toBe("+50.0 (+25.0%)");
     });
 });

@@ -13,6 +13,7 @@
  */
 import { test, expect, Page } from "@playwright/test";
 import * as path from "path";
+import { source as axeSource } from "axe-core";
 
 const previewUrl = "file:///" + path.resolve(__dirname, "visual-harness.html").replace(/\\/g, "/");
 
@@ -32,18 +33,10 @@ const EXPECTED_DPS = 12;
 const VISUAL_NAME = "variance-chart";
 
 /* ────────────────────────────────────────────
-   Axe loader — CDN (no npm dep required)
+   Axe loader — pinned local dependency
    ──────────────────────────────────────────── */
-const AXE_CDN = "https://unpkg.com/axe-core@4.10.0/axe.min.js";
-
-async function injectAxe(page: Page): Promise<boolean> {
-    try {
-        await page.addScriptTag({ url: AXE_CDN });
-        return true;
-    } catch (err) {
-        console.warn(`[a11y] failed to load axe-core from CDN: ${(err as Error).message}`);
-        return false;
-    }
+async function injectAxe(page: Page): Promise<void> {
+    await page.addScriptTag({ content: axeSource });
 }
 
 interface AxeResult {
@@ -66,8 +59,7 @@ test.describe(`${VISUAL_NAME} — Accessibility`, () => {
 
     /* 1. axe-core scan ─────────────────────────── */
     test("axe: no critical or serious violations on baseline fixture", async ({ page }) => {
-        const ok = await injectAxe(page);
-        test.skip(!ok, "axe-core CDN unreachable — skipping scan");
+        await injectAxe(page);
 
         const results = (await page.evaluate(async (selector) => {
             // @ts-ignore axe injected globally

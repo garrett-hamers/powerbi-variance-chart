@@ -9,6 +9,37 @@ import { formatModelValue, formatPrimitiveValue } from "./utils/formatting";
 export type FiniteValue = number | null;
 export type ComparisonType = "budget" | "previousYear" | "forecast";
 export type MeasureKey = "actual" | ComparisonType;
+export type VarianceStateKind = "valid" | "zeroReference" | "missing" | "nonFinite";
+export type VarianceAggregation = "additive" | "nonAdditive";
+export type VarianceDirection = "higherIsBetter" | "lowerIsBetter" | "neutral";
+export type VarianceOutcome = "favorable" | "unfavorable" | "neutral" | "unknown";
+
+export interface VarianceSemantics {
+    aggregation: VarianceAggregation;
+    direction: VarianceDirection;
+}
+
+export interface SemanticVariance {
+    kind: VarianceStateKind;
+    aggregation: VarianceAggregation;
+    direction: VarianceDirection;
+    outcome: VarianceOutcome;
+    actual: FiniteValue;
+    reference: FiniteValue;
+    variance: FiniteValue;
+    percentage: FiniteValue;
+}
+
+export interface DataCompleteness {
+    state: "complete" | "partial";
+    reason?: "hostDataReduction";
+}
+
+export interface TopNState {
+    applied: boolean;
+    completeness: DataCompleteness["state"];
+    others: "notRequested" | "notNeeded" | "complete" | "omittedPartial" | "omittedNonAdditive";
+}
 
 export interface TooltipField {
     displayName: string;
@@ -37,6 +68,7 @@ export interface DataPoint {
     varianceToPYPct: FiniteValue;
     varianceToFC: FiniteValue;
     varianceToFCPct: FiniteValue;
+    varianceStates?: Partial<Record<ComparisonType, SemanticVariance>>;
     tooltipFields?: TooltipField[];
     /** True when Power BI supplied a non-null highlight value for this row. */
     highlighted?: boolean;
@@ -76,6 +108,8 @@ export interface ParsedData {
     minValue: number;
     formats: MeasureFormats;
     locale?: string;
+    completeness?: DataCompleteness;
+    topNState?: TopNState;
 }
 
 interface ValueColumnInfo {
@@ -106,6 +140,78 @@ export function safeSubtract(a: FiniteValue, b: FiniteValue): FiniteValue {
 export function calculatePercentage(variance: FiniteValue, base: FiniteValue): FiniteValue {
     if (variance === null || base === null || base === 0) return null;
     return toFiniteNumber((variance / Math.abs(base)) * 100);
+}
+
+const DEFAULT_VARIANCE_SEMANTICS: VarianceSemantics = {
+    aggregation: "additive",
+    direction: "higherIsBetter"
+};
+
+function inputState(value: unknown): "valid" | "missing" | "nonFinite" {
+    if (value === null || value === undefined || typeof value !== "number") return "missing";
+    return Number.isFinite(value) ? "valid" : "nonFinite";
+}
+
+function varianceOutcome(variance: FiniteValue, direction: VarianceDirection): VarianceOutcome {
+    if (variance === null) return "unknown";
+    if (variance === 0 || direction === "neutral") return "neutral";
+    return variance > 0 ? "favorable" : "unfavorable";
+}
+
+export function calculateSemanticVariance(
+    actualValue: unknown,
+    referenceValue: unknown,
+    semantics: VarianceSemantics = DEFAULT_VARIANCE_SEMANTICS
+): SemanticVariance {
+    const actualState = inputState(actualValue);
+    const referenceState = inputState(referenceValue);
+    const actual = toFiniteNumber(actualValue);
+    const reference = toFiniteNumber(referenceValue);
+    const base = {
+        aggregation: semantics.aggregation,
+        direction: semantics.direction,
+        actual,
+        reference
+    };
+
+    if (actualState === "nonFinite" || referenceState === "nonFinite") {
+        return { ...base, kind: "nonFinite", outcome: "unknown", variance: null, percentage: null };
+    }
+    if (actualState === "missing" || referenceState === "missing") {
+        return { ...base, kind: "missing", outcome: "unknown", variance: null, percentage: null };
+    }
+
+    const rawVariance = safeSubtract(actual, reference);
+    if (rawVariance === null) {
+        return { ...base, kind: "nonFinite", outcome: "unknown", variance: null, percentage: null };
+    }
+    const sign = semantics.direction === "lowerIsBetter" ? -1 : 1;
+    const variance = toFiniteNumber(rawVariance * sign);
+    if (variance === null) {
+        return { ...base, kind: "nonFinite", outcome: "unknown", variance: null, percentage: null };
+    }
+    if (reference === 0) {
+        return {
+            ...base,
+            kind: "zeroReference",
+            outcome: varianceOutcome(variance, semantics.direction),
+            variance,
+            percentage: null
+        };
+    }
+
+    const rawPercentage = calculatePercentage(rawVariance, reference);
+    const percentage = rawPercentage === null ? null : toFiniteNumber(rawPercentage * sign);
+    if (percentage === null) {
+        return { ...base, kind: "nonFinite", outcome: "unknown", variance: null, percentage: null };
+    }
+    return {
+        ...base,
+        kind: "valid",
+        outcome: varianceOutcome(variance, semantics.direction),
+        variance,
+        percentage
+    };
 }
 
 export function finiteSum(values: FiniteValue[]): FiniteValue {
@@ -168,6 +274,10 @@ function rawAt(values: PrimitiveValue[], index: number): PrimitiveValue | undefi
     return values[index];
 }
 
+function rawMeasureAt(column: ValueColumnInfo | undefined, index: number): unknown {
+    return column?.values[index];
+}
+
 function primitiveKey(value: PrimitiveValue | undefined): string {
     if (value instanceof Date) return `date:${value.getTime()}`;
     return `${typeof value}:${String(value)}`;
@@ -183,8 +293,8 @@ export function getGroupKeys(data: ParsedData): string[] {
 }
 
 function varianceFields(actual: FiniteValue, comparison: FiniteValue): [FiniteValue, FiniteValue] {
-    const variance = safeSubtract(actual, comparison);
-    return [variance, calculatePercentage(variance, comparison)];
+    const state = calculateSemanticVariance(actual, comparison);
+    return [state.variance, state.percentage];
 }
 
 export function subsetParsedData(data: ParsedData, dataPoints: DataPoint[]): ParsedData {
@@ -299,9 +409,18 @@ export function parseDataView(dataView: DataView, locale?: string): ParsedData |
         const highlighted = hasHighlights && highlightColumns.some(column =>
             valueAt(column, i, true) !== null
         );
-        const [varianceToBudget, varianceToBudgetPct] = varianceFields(actual, budget);
-        const [varianceToPY, varianceToPYPct] = varianceFields(actual, previousYear);
-        const [varianceToFC, varianceToFCPct] = varianceFields(actual, forecast);
+        const budgetState = calculateSemanticVariance(
+            rawMeasureAt(actualColumn, i),
+            rawMeasureAt(budgetColumn, i)
+        );
+        const previousYearState = calculateSemanticVariance(
+            rawMeasureAt(actualColumn, i),
+            rawMeasureAt(pyColumn, i)
+        );
+        const forecastState = calculateSemanticVariance(
+            rawMeasureAt(actualColumn, i),
+            rawMeasureAt(forecastColumn, i)
+        );
 
         const tooltipFields = tooltipColumns.flatMap(column => {
             const rawValue = column.values[i];
@@ -327,12 +446,17 @@ export function parseDataView(dataView: DataView, locale?: string): ParsedData |
             previousYear,
             forecast,
             comment: textAt(commentValues, i),
-            varianceToBudget,
-            varianceToBudgetPct,
-            varianceToPY,
-            varianceToPYPct,
-            varianceToFC,
-            varianceToFCPct,
+            varianceToBudget: budgetState.variance,
+            varianceToBudgetPct: budgetState.percentage,
+            varianceToPY: previousYearState.variance,
+            varianceToPYPct: previousYearState.percentage,
+            varianceToFC: forecastState.variance,
+            varianceToFCPct: forecastState.percentage,
+            varianceStates: {
+                budget: budgetState,
+                previousYear: previousYearState,
+                forecast: forecastState
+            },
             tooltipFields,
             highlighted,
             index: i,
@@ -364,7 +488,10 @@ export function parseDataView(dataView: DataView, locale?: string): ParsedData |
             previousYear: pyColumn?.format,
             forecast: forecastColumn?.format
         },
-        locale
+        locale,
+        completeness: dataView.metadata?.segment || dataView.metadata?.dataReduction
+            ? { state: "partial", reason: "hostDataReduction" }
+            : { state: "complete" }
     };
     return subsetParsedData(parsed, dataPoints);
 }
@@ -383,6 +510,33 @@ export function getVariancePct(dataPoint: DataPoint, comparisonType: ComparisonT
         case "previousYear": return dataPoint.varianceToPYPct;
         case "forecast": return dataPoint.varianceToFCPct;
     }
+}
+
+export function getSemanticVariance(
+    dataPoint: DataPoint,
+    comparisonType: ComparisonType,
+    semantics: VarianceSemantics = DEFAULT_VARIANCE_SEMANTICS
+): SemanticVariance {
+    const stored = dataPoint.varianceStates?.[comparisonType];
+    if (stored) {
+        const storedSign = stored.direction === "lowerIsBetter" ? -1 : 1;
+        const requestedSign = semantics.direction === "lowerIsBetter" ? -1 : 1;
+        const variance = stored.variance === null
+            ? null
+            : toFiniteNumber(stored.variance * storedSign * requestedSign);
+        const percentage = stored.percentage === null
+            ? null
+            : toFiniteNumber(stored.percentage * storedSign * requestedSign);
+        return {
+            ...stored,
+            aggregation: semantics.aggregation,
+            direction: semantics.direction,
+            outcome: varianceOutcome(variance, semantics.direction),
+            variance,
+            percentage
+        };
+    }
+    return calculateSemanticVariance(dataPoint.actual, dataPoint[comparisonType], semantics);
 }
 
 export function getComparisonValue(dataPoint: DataPoint, comparisonType: ComparisonType): FiniteValue {
@@ -411,6 +565,7 @@ export interface TopNOptions {
     showOthers: boolean;
     othersLabel: string;
     comparisonType: ComparisonType;
+    aggregation?: VarianceAggregation;
 }
 
 function sortableValue(value: FiniteValue, direction: string): number {
@@ -423,8 +578,20 @@ function aggregateMeasure(points: DataPoint[], key: MeasureKey): FiniteValue {
 }
 
 export function applyTopN(data: ParsedData, options: TopNOptions): ParsedData {
-    if (!options.enable) return data;
+    if (!options.enable) {
+        return {
+            ...data,
+            topNState: {
+                applied: false,
+                completeness: data.completeness?.state ?? "complete",
+                others: "notRequested"
+            }
+        };
+    }
     const count = Math.max(0, Math.floor(options.count));
+    const completeness = data.completeness?.state ?? "complete";
+    const aggregation = options.aggregation ?? "additive";
+    let othersState: TopNState["others"] = options.showOthers ? "notNeeded" : "notRequested";
 
     const rankPoints = (points: DataPoint[], group: string, groupKey: string): DataPoint[] => {
         if (points.length <= count) return points;
@@ -446,13 +613,29 @@ export function applyTopN(data: ParsedData, options: TopNOptions): ParsedData {
         const rest = sorted.slice(count);
 
         if (!options.showOthers || rest.length === 0) return topN;
+        if (completeness === "partial") {
+            othersState = "omittedPartial";
+            return topN;
+        }
+        if (aggregation === "nonAdditive") {
+            othersState = "omittedNonAdditive";
+            return topN;
+        }
         const actual = aggregateMeasure(rest, "actual");
         const budget = data.hasBudget ? aggregateMeasure(rest, "budget") : null;
         const previousYear = data.hasPreviousYear ? aggregateMeasure(rest, "previousYear") : null;
         const forecast = data.hasForecast ? aggregateMeasure(rest, "forecast") : null;
-        const [varianceToBudget, varianceToBudgetPct] = varianceFields(actual, budget);
-        const [varianceToPY, varianceToPYPct] = varianceFields(actual, previousYear);
-        const [varianceToFC, varianceToFCPct] = varianceFields(actual, forecast);
+        const budgetState = calculateSemanticVariance(actual, budget, { aggregation, direction: "higherIsBetter" });
+        const previousYearState = calculateSemanticVariance(
+            actual,
+            previousYear,
+            { aggregation, direction: "higherIsBetter" }
+        );
+        const forecastState = calculateSemanticVariance(
+            actual,
+            forecast,
+            { aggregation, direction: "higherIsBetter" }
+        );
 
         topN.push({
             category: options.othersLabel,
@@ -467,22 +650,32 @@ export function applyTopN(data: ParsedData, options: TopNOptions): ParsedData {
             previousYear,
             forecast,
             comment: "",
-            varianceToBudget,
-            varianceToBudgetPct,
-            varianceToPY,
-            varianceToPYPct,
-            varianceToFC,
-            varianceToFCPct,
+            varianceToBudget: budgetState.variance,
+            varianceToBudgetPct: budgetState.percentage,
+            varianceToPY: previousYearState.variance,
+            varianceToPYPct: previousYearState.percentage,
+            varianceToFC: forecastState.variance,
+            varianceToFCPct: forecastState.percentage,
+            varianceStates: {
+                budget: budgetState,
+                previousYear: previousYearState,
+                forecast: forecastState
+            },
             tooltipFields: [],
             highlighted: data.hasHighlights === true && rest.some(point => point.highlighted === true),
             index: null,
             sourceIndices: rest.flatMap(point => point.sourceIndices)
         });
+        othersState = "complete";
         return topN;
     };
 
     if (!data.hasGroups) {
-        return subsetParsedData(data, rankPoints(data.dataPoints, "", ""));
+        const result = subsetParsedData(data, rankPoints(data.dataPoints, "", ""));
+        return {
+            ...result,
+            topNState: { applied: true, completeness, others: othersState }
+        };
     }
 
     const ranked: DataPoint[] = [];
@@ -491,5 +684,9 @@ export function applyTopN(data: ParsedData, options: TopNOptions): ParsedData {
         const group = points[0]?.group ?? "";
         ranked.push(...rankPoints(points, group, groupKey));
     }
-    return subsetParsedData(data, ranked);
+    const result = subsetParsedData(data, ranked);
+    return {
+        ...result,
+        topNState: { applied: true, completeness, others: othersState }
+    };
 }

@@ -4,8 +4,8 @@ A free, open-source Power BI custom visual for IBCS-aligned variance analysis. B
 
 ![Power BI](https://img.shields.io/badge/Power_BI-API_5.11.1-yellow)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Tests](https://img.shields.io/badge/Tests-359_passing-brightgreen)
-![Version](https://img.shields.io/badge/Version-1.8.4.0-blue)
+![Tests](https://img.shields.io/badge/Tests-386_passing-brightgreen)
+![Version](https://img.shields.io/badge/Version-1.8.5.0-blue)
 
 ---
 
@@ -98,10 +98,18 @@ A free, open-source Power BI custom visual for IBCS-aligned variance analysis. B
 | **Difference Highlighting** | Enable/disable, threshold, highlight positive/negative |
 | **Axis Break Marker** | Show/hide a non-destructive marker on the continuous scale, marker value |
 | **Analytics: Reference Line** | Show/hide, label, value, color, solid/dashed/dotted style |
-| **Top N + Others** | Enable, count, sort by/direction, show Others, Others label |
+| **Top N + Others** | Enable, count, sort by/direction, additive/non-additive semantics, show Others, Others label |
 | **Small Multiples** | Grid columns, spacing, show headers, scale mode |
 | **Responsive Design** | Enable, minimum chart width |
 | **Interaction** | Selection, incoming highlights, tooltips, drilldown, cross-filter mode |
+
+### Variance and completeness semantics
+
+- Percentage variance uses `(Actual - Reference) / abs(Reference) * 100`.
+- Invert variance preserves that formula and reverses both displayed variance signs for lower-is-better measures.
+- A zero reference is reported as N/A; missing and non-finite values remain unavailable rather than becoming zero.
+- Top N ranking can operate on reduced host data, but an Others aggregate is emitted only when the returned data is complete and the measure is additive.
+- A Power BI data-reduction warning means ranking is provisional; use model filters to obtain an exact complete result.
 
 ---
 
@@ -124,18 +132,23 @@ npm start
 # Run unit tests
 npm test
 
-# Run the full local gate: audit + eslint + typecheck + tests + package
+# Run the full local gate: audit + eslint + typecheck + unit/e2e tests + package
 npm run certify
 ```
 
 There is no hosted CI for this repository. `npm run certify` is the only supported
 validation entry point — run it from a clean `npm ci` before considering a change ready.
 
+This repository is engineered as a certification candidate; this README does not claim
+that Microsoft has awarded certification. The lowercase `certification` branch must
+remain an exact source match for the package under review and should advance only when
+a specific package is submitted or resubmitted. Development continues on `master`.
+
 ---
 
 ## Testing
 
-369 automated unit tests, plus a browser-based end-to-end suite.
+386 automated unit tests, plus a browser-based end-to-end suite.
 
 | Suite | Coverage |
 |-------|----------|
@@ -153,7 +166,7 @@ npm test
 
 ### End-to-end (Playwright)
 
-206 browser tests covering accessibility (axe-core, keyboard, ARIA), context menus,
+208 browser tests covering accessibility (local axe-core, keyboard, ARIA), context menus,
 pointer/touch tooltips, format-pane coverage, theming (light/dark/high-contrast),
 performance budgets, and rendering of every chart type.
 
@@ -162,8 +175,8 @@ npx playwright install chromium   # one time
 npm run preview
 ```
 
-The e2e suite is deliberately excluded from `npm run certify` so the certification gate
-stays fast and free of browser downloads.
+The e2e suite is part of `npm run certify`. Install Chromium once with the command above
+before running the release gate.
 
 ---
 

@@ -413,6 +413,14 @@
                         ]
                     }
                 },
+                "aggregation": {
+                    "type": {
+                        "enumeration": [
+                            { "value": "additive", "displayName": "Additive" },
+                            { "value": "nonAdditive", "displayName": "Non-additive" }
+                        ]
+                    }
+                },
                 "showOthers": {
                     "type": { "bool": true }
                 },

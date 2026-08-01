@@ -631,7 +631,7 @@ class AboutCard extends FormattingSettingsCard {
     version = new formattingSettings.TextInput({
         name: "version",
         displayName: "Version",
-        value: "1.8.4.0",
+        value: "1.8.5.0",
         placeholder: ""
     });
 
@@ -679,6 +679,17 @@ class TopNCard extends FormattingSettingsCard {
         value: { value: "desc", displayName: "Descending" }
     });
 
+    aggregation = new formattingSettings.ItemDropdown({
+        name: "aggregation",
+        displayName: "Measure Aggregation",
+        description: "Others is available only for additive measures.",
+        items: [
+            { value: "additive", displayName: "Additive" },
+            { value: "nonAdditive", displayName: "Non-additive" }
+        ],
+        value: { value: "additive", displayName: "Additive" }
+    });
+
     showOthers = new formattingSettings.ToggleSwitch({
         name: "showOthers",
         displayName: "Show Others",
@@ -700,6 +711,7 @@ class TopNCard extends FormattingSettingsCard {
         this.count,
         this.sortBy,
         this.sortDirection,
+        this.aggregation,
         this.showOthers,
         this.othersLabel
     ];

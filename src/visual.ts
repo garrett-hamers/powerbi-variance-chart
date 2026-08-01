@@ -47,8 +47,7 @@ import {
     getDataPointGroupKey,
     getGroupKeys,
     getAvailableComparisonType,
-    getVariance,
-    getVariancePct,
+    getSemanticVariance,
     MeasureKey,
     ParsedData,
     parseDataView,
@@ -327,7 +326,12 @@ export class Visual implements IVisual {
             sortDirection: enumSetting(topN.sortDirection.value.value, ["asc", "desc"], "desc"),
             showOthers: topN.showOthers.value,
             othersLabel: topN.othersLabel.value || "Others",
-            comparisonType
+            comparisonType,
+            aggregation: enumSetting(
+                topN.aggregation.value.value,
+                ["additive", "nonAdditive"] as const,
+                "additive"
+            )
         });
         if (this.parsedData.dataPoints.length === 0) {
             this.renderNoData("Top N settings exclude all categories.");
@@ -665,6 +669,14 @@ export class Visual implements IVisual {
     ): void {
         if (typeof this.host.displayWarningIcon !== "function") return;
 
+        if (data.completeness?.state === "partial") {
+            this.host.displayWarningIcon(
+                this.localizer.get("dataReducedTitle"),
+                this.localizer.get("dataReducedMessage")
+            );
+            return;
+        }
+
         if (chartType === "columnStacked" && this.hasComparisonData(data, comparisonType)) {
             this.host.displayWarningIcon(
                 this.localizer.get("scenarioGroupedTitle"),
@@ -673,17 +685,8 @@ export class Visual implements IVisual {
             return;
         }
 
-        if (this.dataView?.metadata?.segment || data.dataPoints.length >= 1000) {
-            this.host.displayWarningIcon(
-                this.localizer.get("dataReducedTitle"),
-                this.localizer.get("dataReducedMessage")
-            );
-            return;
-        }
-
         const hasZeroComparison = data.dataPoints.some(point =>
-            point.actual !== null
-            && getComparisonValue(point, comparisonType) === 0
+            getSemanticVariance(point, comparisonType).kind === "zeroReference"
         );
         if (hasZeroComparison) {
             this.host.displayWarningIcon(
@@ -800,6 +803,8 @@ export class Visual implements IVisual {
                 .attr("y", viewport.y + cell.y)
                 .attr("width", Math.max(0, grid.cellWidth))
                 .attr("height", Math.max(0, grid.cellHeight))
+                .attr("role", "group")
+                .attr("aria-label", groupLabel)
                 .attr("overflow", "hidden");
 
             if (config.showHeaders) {
@@ -924,10 +929,12 @@ export class Visual implements IVisual {
             .style("box-sizing", "border-box");
 
         comments.forEach((point, index) => {
-            const variance = getVariance(point, settings.comparisonType);
-            const percentage = getVariancePct(point, settings.comparisonType);
-            const displayedVariance = variance === null ? null : settings.invertVariance ? -variance : variance;
-            const displayedPercentage = percentage === null ? null : settings.invertVariance ? -percentage : percentage;
+            const semanticVariance = getSemanticVariance(point, settings.comparisonType, {
+                aggregation: "additive",
+                direction: settings.invertVariance ? "lowerIsBetter" : "higherIsBetter"
+            });
+            const displayedVariance = semanticVariance.variance;
+            const displayedPercentage = semanticVariance.percentage;
             const card = scroll.append("xhtml:div")
                 .style("display", "flex")
                 .style("gap", `${settings.commentBox.padding}px`)
@@ -1592,7 +1599,8 @@ export class Visual implements IVisual {
 
     private buildTooltipForDataPoint(point: DataPoint, comparisonType: ComparisonType): VisualTooltipDataItem[] {
         const comparisonLabel = this.getComparisonLabel(comparisonType);
-        const { variance, percentage } = this.getDisplayedVariance(point, comparisonType);
+        const semanticVariance = this.getDisplayedVariance(point, comparisonType);
+        const { variance, percentage } = semanticVariance;
         const items: VisualTooltipDataItem[] = [{
             displayName: this.localizer.get("category"),
             value: point.category
@@ -1627,8 +1635,7 @@ export class Visual implements IVisual {
         }
         if (variance !== null) {
             const varianceText = this.formatModelMeasure(variance, "actual", true);
-            const percentageText = percentage === null
-                && getComparisonValue(point, comparisonType) === 0
+            const percentageText = semanticVariance.kind === "zeroReference"
                 ? `${varianceText} (N/A)`
                 : percentage === null
                     ? varianceText
@@ -1636,6 +1643,17 @@ export class Visual implements IVisual {
             items.push({
                 displayName: `${this.localizer.get("varianceTo")} ${comparisonLabel}`,
                 value: percentageText
+            });
+        } else if (
+            this.parsedData !== null
+            && this.hasComparisonData(this.parsedData, comparisonType)
+            && (semanticVariance.kind === "missing" || semanticVariance.kind === "nonFinite")
+        ) {
+            items.push({
+                displayName: `${this.localizer.get("varianceTo")} ${comparisonLabel}`,
+                value: semanticVariance.kind === "missing"
+                    ? this.localizer.get("varianceMissing")
+                    : this.localizer.get("varianceNonFinite")
             });
         }
         if (point.tooltipFields) {
@@ -1678,16 +1696,13 @@ export class Visual implements IVisual {
     private getDisplayedVariance(
         point: DataPoint,
         comparisonType: ComparisonType
-    ): { variance: FiniteValue; percentage: FiniteValue } {
-        const rawVariance = getVariance(point, comparisonType);
-        const rawPercentage = getVariancePct(point, comparisonType);
-        if (!this.formattingSettings.chartSettingsCard.invertVariance.value) {
-            return { variance: rawVariance, percentage: rawPercentage };
-        }
-        return {
-            variance: rawVariance === null ? null : -rawVariance,
-            percentage: rawPercentage === null ? null : -rawPercentage
-        };
+    ) {
+        return getSemanticVariance(point, comparisonType, {
+            aggregation: "additive",
+            direction: this.formattingSettings.chartSettingsCard.invertVariance.value
+                ? "lowerIsBetter"
+                : "higherIsBetter"
+        });
     }
 
     private getAccessibleName(point: DataPoint, comparisonType: ComparisonType): string {
@@ -1715,7 +1730,8 @@ export class Visual implements IVisual {
                 parts.push(`${comparison.label} ${this.formatModelMeasure(value, comparison.type)}`);
             }
         }
-        const { variance, percentage } = this.getDisplayedVariance(point, comparisonType);
+        const semanticVariance = this.getDisplayedVariance(point, comparisonType);
+        const { variance, percentage } = semanticVariance;
         if (variance !== null) {
             parts.push(
                 `${this.localizer.get("varianceTo")} ${comparisonLabel} `
@@ -1723,7 +1739,20 @@ export class Visual implements IVisual {
             );
         }
         if (percentage !== null) parts.push(formatPercent(percentage, 1, true, this.host.locale));
-        else if (variance !== null && getComparisonValue(point, comparisonType) === 0) parts.push("N/A");
+        else if (semanticVariance.kind === "zeroReference") parts.push(this.localizer.get("percentageZeroReference"));
+        else if (
+            this.parsedData !== null
+            && this.hasComparisonData(this.parsedData, comparisonType)
+            && semanticVariance.kind === "missing"
+        ) {
+            parts.push(this.localizer.get("varianceMissing"));
+        } else if (
+            this.parsedData !== null
+            && this.hasComparisonData(this.parsedData, comparisonType)
+            && semanticVariance.kind === "nonFinite"
+        ) {
+            parts.push(this.localizer.get("varianceNonFinite"));
+        }
         return parts.join(". ");
     }
 

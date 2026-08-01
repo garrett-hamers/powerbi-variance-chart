@@ -760,6 +760,23 @@
     },
     {
       "objectName": "topN",
+      "propertyName": "aggregation",
+      "type": "enumeration",
+      "isFilter": false,
+      "defaultValue": null,
+      "enumValues": [
+        {
+          "value": "additive",
+          "displayName": "Additive"
+        },
+        {
+          "value": "nonAdditive",
+          "displayName": "Non-additive"
+        }
+      ]
+    },
+    {
+      "objectName": "topN",
       "propertyName": "showOthers",
       "type": "bool",
       "isFilter": false,
@@ -825,7 +842,7 @@
       "defaultValue": null
     }
   ],
-  "propertyCount": 69,
+  "propertyCount": 70,
   "warnings": [],
-  "generatedAt": "2026-07-31T02:17:52.989Z"
+  "generatedAt": "2026-08-01T01:42:44.707Z"
 }

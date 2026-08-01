@@ -48,14 +48,20 @@ describe("certification gate", () => {
 
         expect(scripts.audit).toBe("npm audit --audit-level=moderate");
         expect(scripts.certify).toBeTypeOf("string");
+        expect(scripts["test:e2e"]).toBe(
+            "npm run preview:build && playwright test --config playwright.config.ts"
+        );
 
         const certify = scripts.certify ?? "";
         const auditStep = certify.indexOf("run audit");
+        const e2eStep = certify.indexOf("run test:e2e");
         const packageStep = certify.indexOf("run package");
         // Audit must be present and must run before packaging so a failed audit
         // short-circuits the `&&` chain before `pbiviz package` is ever reached.
         expect(auditStep).toBeGreaterThanOrEqual(0);
+        expect(e2eStep).toBeGreaterThan(auditStep);
         expect(packageStep).toBeGreaterThan(auditStep);
+        expect(packageStep).toBeGreaterThan(e2eStep);
     });
 
     it("keeps the four-part version identical across every packaged manifest", () => {

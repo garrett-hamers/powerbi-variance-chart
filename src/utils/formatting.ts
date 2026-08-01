@@ -232,7 +232,7 @@ export function formatVariance(
     options: Partial<FormatOptions> = {}
 ): string {
     const formattedValue = formatNumber(value, { ...options, showSign: true });
-    return showPercentage
+    return showPercentage && percentage !== null && Number.isFinite(percentage)
         ? `${formattedValue} (${formatPercent(percentage, 1, true, options.locale)})`
         : formattedValue;
 }
