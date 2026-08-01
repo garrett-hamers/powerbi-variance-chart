@@ -4,8 +4,8 @@ A free, open-source Power BI custom visual for IBCS-aligned variance analysis. B
 
 ![Power BI](https://img.shields.io/badge/Power_BI-API_5.11.1-yellow)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Tests](https://img.shields.io/badge/Tests-386_passing-brightgreen)
-![Version](https://img.shields.io/badge/Version-1.8.5.0-blue)
+![Tests](https://img.shields.io/badge/Tests-389_passing-brightgreen)
+![Version](https://img.shields.io/badge/Version-1.8.6.0-blue)
 
 ---
 
@@ -111,6 +111,15 @@ A free, open-source Power BI custom visual for IBCS-aligned variance analysis. B
 - Top N ranking can operate on reduced host data, but an Others aggregate is emitted only when the returned data is complete and the measure is additive.
 - A Power BI data-reduction warning means ranking is provisional; use model filters to obtain an exact complete result.
 
+### Host data-reduction limit
+
+The categorical mapping requests `top.count: 1000`, which is the host contract for this
+visual. A report containing more than 1,000 category rows (and the practical 20K-row
+report scenarios that motivated this audit) is therefore reduced before the visual can
+rank it. Top N ranking and Others are exact only when the host reports a complete result;
+on partial data the visual omits Others and labels the result as provisional. The visual
+does not implement segmented fetching and does not claim Microsoft or IBCS certification.
+
 ---
 
 ## Installation
@@ -148,7 +157,7 @@ a specific package is submitted or resubmitted. Development continues on `master
 
 ## Testing
 
-386 automated unit tests, plus a browser-based end-to-end suite.
+389 automated unit tests, plus a browser-based end-to-end suite.
 
 | Suite | Coverage |
 |-------|----------|

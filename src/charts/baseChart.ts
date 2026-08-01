@@ -693,7 +693,54 @@ export abstract class BaseChart {
         const fontSize = commentBox.fontSize;
         const padding = commentBox.padding;
 
-        // Use foreignObject to enable native scrollbar
+        // Keep an SVG-only representation in the visual tree so exported SVG/PDF
+        // content never depends on foreignObject support.
+        const fallback = this.container.append("g")
+            .attr("class", "comment-box-svg-fallback")
+            .attr("role", "region")
+            .attr("aria-label", this.getChartLabel("comments", "Chart comments"))
+            .attr("transform", `translate(${x},${y})`);
+        fallback.append("rect")
+            .attr("width", boxWidth)
+            .attr("height", boxHeight)
+            .attr("fill", this.settings.background)
+            .attr("stroke", this.settings.foreground);
+        const maxChars = Math.max(8, Math.floor(Math.max(1, boxWidth - markerSize - padding * 3) / (fontSize * 0.55)));
+        const maxLines = Math.max(1, Math.floor(Math.max(1, boxHeight - padding * 2) / (fontSize * 1.35)));
+        let lineNumber = 0;
+        comments.forEach(({ dp }, commentNum) => {
+            if (lineNumber >= maxLines) return;
+            const markerY = padding + lineNumber * fontSize * 1.35 + markerSize / 2;
+            fallback.append("circle")
+                .attr("cx", padding + markerSize / 2)
+                .attr("cy", markerY)
+                .attr("r", markerSize / 2)
+                .attr("fill", "none")
+                .attr("stroke", markerColor);
+            fallback.append("text")
+                .attr("x", padding + markerSize / 2)
+                .attr("y", markerY + fontSize * 0.35)
+                .attr("text-anchor", "middle")
+                .attr("fill", markerColor)
+                .attr("font-size", `${fontSize}px`)
+                .text(String(commentNum + 1));
+            const label = dp.group ? `${dp.group}, ${dp.category}` : dp.category;
+            const rawComment = dp.comment.trim();
+            const lines = [`${label}:`, ...rawComment.match(new RegExp(`.{1,${maxChars}}(?:\\s|$)|.{1,${maxChars}}`, "g")) ?? [rawComment]];
+            for (const line of lines) {
+                if (lineNumber >= maxLines) break;
+                fallback.append("text")
+                    .attr("x", padding + markerSize + padding)
+                    .attr("y", padding + lineNumber * fontSize * 1.35 + fontSize)
+                    .attr("fill", this.settings.foreground)
+                    .attr("font-size", `${fontSize}px`)
+                    .text(line.trim());
+                lineNumber++;
+            }
+        });
+
+        // Retain the HTML path for hosts that support it, but it is supplementary
+        // rather than the only visible/accessibility representation.
         const fo = this.container.append("foreignObject")
             .attr("class", "comment-box")
             .attr("x", x)
@@ -1019,8 +1066,19 @@ export abstract class BaseChart {
             .attr("stroke-dasharray", reference.style === "dashed"
                 ? "6,3"
                 : reference.style === "dotted" ? "2,2" : null)
+            .attr("aria-hidden", "true")
             .append("title")
             .text(`${reference.label}: ${this.formatValue(reference.value)}`);
+        this.container.append("text")
+            .attr("class", "reference-line-label")
+            .attr("x", Math.max(0, this.chartWidth - 4))
+            .attr("y", Math.max(12, y - 4))
+            .attr("text-anchor", "end")
+            .attr("fill", reference.color)
+            .attr("font-size", `${Math.max(9, this.settings.categories.fontSize)}px`)
+            .attr("role", "img")
+            .attr("aria-label", `${reference.label}: ${this.formatValue(reference.value)}`)
+            .text(reference.label);
     }
 
     protected renderHorizontalReferenceLine(
@@ -1041,8 +1099,18 @@ export abstract class BaseChart {
             .attr("stroke-dasharray", reference.style === "dashed"
                 ? "6,3"
                 : reference.style === "dotted" ? "2,2" : null)
+            .attr("aria-hidden", "true")
             .append("title")
             .text(`${reference.label}: ${this.formatValue(reference.value)}`);
+        this.container.append("text")
+            .attr("class", "reference-line-label")
+            .attr("x", Math.min(this.chartWidth - 4, Math.max(4, x + 4)))
+            .attr("y", 14)
+            .attr("fill", reference.color)
+            .attr("font-size", `${Math.max(9, this.settings.categories.fontSize)}px`)
+            .attr("role", "img")
+            .attr("aria-label", `${reference.label}: ${this.formatValue(reference.value)}`)
+            .text(reference.label);
     }
 
     protected createPatternDefs(): void {

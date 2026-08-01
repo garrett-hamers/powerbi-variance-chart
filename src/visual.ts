@@ -79,6 +79,11 @@ interface FilterTuple {
     category: FilterValue;
     group?: FilterValue;
 }
+interface TouchPointerState {
+    x: number;
+    y: number;
+    moved: boolean;
+}
 type LegendPosition = "top" | "bottom" | "left" | "right";
 const FILTER_MERGE = (powerbi.FilterAction?.merge ?? 0) as powerbi.FilterAction;
 const FILTER_REMOVE = (powerbi.FilterAction?.remove ?? 1) as powerbi.FilterAction;
@@ -161,6 +166,10 @@ function enumSetting<T extends string>(
         : fallback;
 }
 
+function isRtlLocale(locale?: string): boolean {
+    return /^(ar|fa|he|ur)(-|$)/i.test(locale ?? "");
+}
+
 export class Visual implements IVisual {
     private readonly target: HTMLElement;
     private readonly host: IVisualHost;
@@ -187,6 +196,11 @@ export class Visual implements IVisual {
     private readonly tooltipTimers = new Map<Element, number>();
     private readonly pointerTooltipElements = new WeakSet<Element>();
     private readonly activeTooltipElements = new WeakSet<Element>();
+    private readonly touchPointers = new Map<Element, TouchPointerState>();
+    private readonly suppressedTouchClicks = new Map<Element, number>();
+    private preservedScroll = { left: 0, top: 0 };
+    private scrollCompatibilityKey: string | null = null;
+    private warningMessage: string | null = null;
 
     constructor(options?: VisualConstructorOptions) {
         if (!options) throw new Error("Visual constructor options are required.");
@@ -221,6 +235,9 @@ export class Visual implements IVisual {
 
         this.target.classList.add("atlyn-visual-host");
         this.target.style.overflow = "auto";
+        const direction = isRtlLocale(this.host.locale) ? "rtl" : "ltr";
+        this.target.dir = direction;
+        this.target.style.direction = direction;
         this.target.style.setProperty("--atlyn-foreground", this.foreground);
         this.target.style.setProperty("--atlyn-background", this.background);
         this.target.style.setProperty("--atlyn-selection", this.selectionColor);
@@ -236,6 +253,7 @@ export class Visual implements IVisual {
             .append("svg")
             .classed("varianceChart", true)
             .classed("high-contrast", palette.isHighContrast === true)
+            .attr("dir", direction)
             .attr("role", "group")
             .attr("aria-label", this.localizer.get("visualName"))
             .attr("aria-description", this.localizer.get("chartDescription"))
@@ -274,16 +292,25 @@ export class Visual implements IVisual {
     public destroy(): void {
         for (const timer of this.tooltipTimers.values()) window.clearTimeout(timer);
         this.tooltipTimers.clear();
+        this.touchPointers.clear();
+        this.suppressedTouchClicks.clear();
         this.tooltipServiceWrapper.hide();
         this.subSelectionHelper?.destroy();
+        this.svg.on(".atlynTooltip", null).on(".atlynTooltipGuard", null);
     }
 
     private renderUpdate(options: VisualUpdateOptions): void {
+        this.preservedScroll = {
+            left: Math.max(0, this.target.scrollLeft),
+            top: Math.max(0, this.target.scrollTop)
+        };
         this.resetCanvas(options.viewport.width, options.viewport.height);
         this.dataView = options.dataViews?.[0];
 
         if (!this.dataView) {
+            this.scrollCompatibilityKey = null;
             this.renderLandingPage();
+            this.resetScrollPosition();
             return;
         }
 
@@ -296,11 +323,15 @@ export class Visual implements IVisual {
 
         this.parsedData = parseDataView(this.dataView, this.host.locale);
         if (!this.parsedData || this.parsedData.dataPoints.length === 0) {
+            this.scrollCompatibilityKey = null;
             this.renderLandingPage();
+            this.resetScrollPosition();
             return;
         }
         if (!this.parsedData.hasActual) {
+            this.scrollCompatibilityKey = null;
             this.renderNoData(this.localizer.get("noActual"));
+            this.resetScrollPosition();
             return;
         }
 
@@ -313,7 +344,9 @@ export class Visual implements IVisual {
             if (available) {
                 comparisonType = available;
             } else if (["variance", "waterfall", "lollipop", "dot"].includes(chartType)) {
+                this.scrollCompatibilityKey = null;
                 this.renderNoData(this.localizer.get("addComparison"));
+                this.resetScrollPosition();
                 return;
             }
         }
@@ -331,12 +364,20 @@ export class Visual implements IVisual {
                 topN.aggregation.value.value,
                 ["additive", "nonAdditive"] as const,
                 "additive"
-            )
+            ),
+            direction: this.formattingSettings.chartSettingsCard.invertVariance.value
+                ? "lowerIsBetter"
+                : "higherIsBetter"
         });
         if (this.parsedData.dataPoints.length === 0) {
+            this.scrollCompatibilityKey = null;
             this.renderNoData("Top N settings exclude all categories.");
+            this.resetScrollPosition();
             return;
         }
+        const nextScrollKey = this.getScrollCompatibilityKey(this.parsedData, chartType);
+        const preserveScroll = this.scrollCompatibilityKey === nextScrollKey;
+        this.scrollCompatibilityKey = nextScrollKey;
         this.reportDataWarnings(this.parsedData, comparisonType, chartType);
 
         const viewportWidth = finiteDimension(options.viewport.width);
@@ -362,6 +403,8 @@ export class Visual implements IVisual {
             const dimensions = this.calculateLayout(content.width, content.height, chartType, settings, breakpoint);
             createChart(chartType, this.chartContainer, this.parsedData, settings, dimensions).render();
         }
+        this.renderTrustWarning();
+        this.restoreScrollPosition(preserveScroll);
         if (this.allowInteractions() && this.formattingSettings.interactionCard.enableDrilldown.value) {
             this.renderDrillUpButton();
         }
@@ -385,6 +428,8 @@ export class Visual implements IVisual {
         const safeHeight = finiteDimension(height);
         for (const timer of this.tooltipTimers.values()) window.clearTimeout(timer);
         this.tooltipTimers.clear();
+        this.touchPointers.clear();
+        this.suppressedTouchClicks.clear();
         this.host.tooltipService.hide({ immediately: true, isTouchEvent: false });
         this.chartContainer.selectAll("*").remove();
         this.svg.selectAll(".clear-selection-btn").remove();
@@ -399,8 +444,33 @@ export class Visual implements IVisual {
         this.selectionIds = [];
         this.parsedData = null;
         this.statusRegion.textContent = "";
+        this.warningMessage = null;
+    }
+
+    private resetScrollPosition(): void {
         this.target.scrollLeft = 0;
         this.target.scrollTop = 0;
+        this.preservedScroll = { left: 0, top: 0 };
+    }
+
+    private restoreScrollPosition(compatible: boolean): void {
+        if (!compatible) {
+            this.resetScrollPosition();
+            return;
+        }
+        const maxLeft = Math.max(0, this.target.scrollWidth - this.target.clientWidth);
+        const maxTop = Math.max(0, this.target.scrollHeight - this.target.clientHeight);
+        this.target.scrollLeft = Math.min(this.preservedScroll.left, maxLeft);
+        this.target.scrollTop = Math.min(this.preservedScroll.top, maxTop);
+    }
+
+    private getScrollCompatibilityKey(data: ParsedData, chartType: ChartType): string {
+        return JSON.stringify({
+            chartType,
+            groups: getGroupKeys(data),
+            points: data.dataPoints.map(point => point.sourceIndices),
+            comments: data.hasComments
+        });
     }
 
     private getContentDimensions(width: number, height: number): { width: number; height: number } {
@@ -667,33 +737,60 @@ export class Visual implements IVisual {
         comparisonType: ComparisonType,
         chartType: ChartType
     ): void {
-        if (typeof this.host.displayWarningIcon !== "function") return;
+        this.warningMessage = null;
 
         if (data.completeness?.state === "partial") {
-            this.host.displayWarningIcon(
+            this.setWarning(
                 this.localizer.get("dataReducedTitle"),
                 this.localizer.get("dataReducedMessage")
             );
-            return;
         }
 
-        if (chartType === "columnStacked" && this.hasComparisonData(data, comparisonType)) {
-            this.host.displayWarningIcon(
+        if (data.topNState?.others === "omittedPartial") {
+            this.setWarning(
+                this.localizer.get("othersPartialTitle"),
+                this.localizer.get("othersPartialMessage")
+            );
+        } else if (data.topNState?.others === "omittedNonAdditive") {
+            this.setWarning(
+                this.localizer.get("othersNonAdditiveTitle"),
+                this.localizer.get("othersNonAdditiveMessage")
+            );
+        } else if (chartType === "columnStacked" && this.hasComparisonData(data, comparisonType)) {
+            this.setWarning(
                 this.localizer.get("scenarioGroupedTitle"),
                 this.localizer.get("scenarioGroupedMessage")
             );
-            return;
         }
 
         const hasZeroComparison = data.dataPoints.some(point =>
             getSemanticVariance(point, comparisonType).kind === "zeroReference"
         );
         if (hasZeroComparison) {
-            this.host.displayWarningIcon(
-                this.localizer.get("zeroBaseTitle"),
-                this.localizer.get("zeroBaseMessage")
-            );
+            this.setWarning(this.localizer.get("zeroBaseTitle"), this.localizer.get("zeroBaseMessage"));
         }
+    }
+
+    private setWarning(title: string, message: string): void {
+        this.warningMessage = `${title}: ${message}`;
+        this.announce(this.warningMessage);
+        if (typeof this.host.displayWarningIcon === "function") {
+            this.host.displayWarningIcon(title, message);
+        }
+    }
+
+    private renderTrustWarning(): void {
+        if (!this.warningMessage) return;
+        const width = finiteDimension(Number(this.svg.attr("width")));
+        const warning = this.chartContainer.append("g")
+            .attr("class", "trust-warning")
+            .attr("role", "note")
+            .attr("aria-label", this.warningMessage)
+            .attr("transform", `translate(${Math.min(8, width / 2)}, 14)`);
+        warning.append("text")
+            .attr("fill", this.foreground)
+            .attr("font-size", "10px")
+            .text(`⚠ ${this.warningMessage}`);
     }
 
     private applyResponsiveSettings(settings: ChartSettings, breakpoint: string): void {
@@ -911,6 +1008,25 @@ export class Visual implements IVisual {
         const width = Math.max(0, area.width - 20);
         const height = Math.max(0, area.height);
         if (width === 0 || height === 0) return;
+        const fallback = this.chartContainer.append("g")
+            .attr("class", "comment-box-svg-fallback")
+            .attr("role", "region")
+            .attr("aria-label", this.localizer.get("comments"))
+            .attr("transform", `translate(${x},${y})`);
+        fallback.append("rect")
+            .attr("width", width)
+            .attr("height", height)
+            .attr("fill", this.background)
+            .attr("stroke", this.foreground);
+        const maxLines = Math.max(1, Math.floor(height / 16));
+        comments.slice(0, maxLines).forEach((point, index) => {
+            fallback.append("text")
+                .attr("x", 8)
+                .attr("y", 16 + index * 16)
+                .attr("fill", this.foreground)
+                .attr("font-size", "10px")
+                .text(`${index + 1}. ${point.category}: ${point.comment.trim().slice(0, 120)}`);
+        });
         const box = this.chartContainer.append("foreignObject")
             .attr("class", "comment-box")
             .attr("x", x)
@@ -1098,6 +1214,11 @@ export class Visual implements IVisual {
             if (enableSelection) {
                 d3.select(element).on("click", (event: MouseEvent) => {
                     event.stopPropagation();
+                    const suppressedUntil = this.suppressedTouchClicks.get(element) ?? 0;
+                    if (Date.now() < suppressedUntil) {
+                        this.suppressedTouchClicks.delete(element);
+                        return;
+                    }
                     this.activatePoint(sourceIndices, event.ctrlKey || event.metaKey);
                 });
             }
@@ -1107,6 +1228,37 @@ export class Visual implements IVisual {
                     this.activateDrillPoint(sourceIndices);
                 });
             }
+
+            d3.select(element)
+                .on("pointerdown.atlynTouch", (event: PointerEvent) => {
+                    if (event.pointerType !== "touch") return;
+                    this.touchPointers.set(element, {
+                        x: event.clientX,
+                        y: event.clientY,
+                        moved: false
+                    });
+                })
+                .on("pointermove.atlynTouch", (event: PointerEvent) => {
+                    if (event.pointerType !== "touch") return;
+                    const start = this.touchPointers.get(element);
+                    if (!start) return;
+                    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10) {
+                        start.moved = true;
+                        this.cancelTouchInteraction(element);
+                    }
+                })
+                .on("pointerup.atlynTouch", (event: PointerEvent) => {
+                    if (event.pointerType !== "touch") return;
+                    const start = this.touchPointers.get(element);
+                    this.touchPointers.delete(element);
+                    if (start?.moved) this.suppressedTouchClicks.set(element, Date.now() + 400);
+                })
+                .on("pointercancel.atlynTouch", (event: PointerEvent) => {
+                    if (event.pointerType !== "touch") return;
+                    this.touchPointers.delete(element);
+                    this.cancelTouchInteraction(element);
+                    this.suppressedTouchClicks.set(element, Date.now() + 400);
+                });
 
             if (
                 this.formattingSettings.interactionCard.enableTooltips.value
@@ -1505,8 +1657,20 @@ export class Visual implements IVisual {
             })
             .on("pointermove.atlynTooltip", (event: PointerEvent) => {
                 if (sourceIndices.length === 1) return;
+                if (event.pointerType === "touch") {
+                    const start = this.touchPointers.get(element);
+                    if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10) {
+                        start.moved = true;
+                        this.cancelTouchInteraction(element);
+                    }
+                    return;
+                }
                 if (event.pointerType !== "mouse" || !this.activeTooltipElements.has(element)) return;
                 this.moveTooltip(event, point, sourceIndices, comparisonType, false);
+            })
+            .on("pointercancel.atlynTooltip", (event: PointerEvent) => {
+                if (sourceIndices.length === 1) return;
+                this.cancelTouchInteraction(element);
             })
             .on("pointerout.atlynTooltip", (event: PointerEvent) => {
                 if (sourceIndices.length === 1) return;
@@ -1558,6 +1722,13 @@ export class Visual implements IVisual {
         if (timer === undefined) return;
         window.clearTimeout(timer);
         this.tooltipTimers.delete(element);
+    }
+
+    private cancelTouchInteraction(element: Element): void {
+        this.cancelTooltipTimer(element);
+        this.hideTooltip(element, true);
+        this.host.tooltipService.hide({ immediately: true, isTouchEvent: true });
+        this.pointerTooltipElements.delete(element);
     }
 
     private hideTooltip(element: Element, isTouchEvent: boolean): void {
@@ -1659,6 +1830,17 @@ export class Visual implements IVisual {
         if (point.tooltipFields) {
             items.push(...point.tooltipFields.map(field => ({ displayName: field.displayName, value: field.value })));
         }
+        if (this.parsedData?.topNState?.others === "omittedPartial") {
+            items.push({
+                displayName: this.localizer.get("othersPartialTitle"),
+                value: this.localizer.get("othersPartialMessage")
+            });
+        } else if (this.parsedData?.topNState?.others === "omittedNonAdditive") {
+            items.push({
+                displayName: this.localizer.get("othersNonAdditiveTitle"),
+                value: this.localizer.get("othersNonAdditiveMessage")
+            });
+        }
         if (point.comment) items.push({ displayName: this.localizer.get("comments"), value: point.comment });
         return items;
     }
@@ -1752,6 +1934,11 @@ export class Visual implements IVisual {
             && semanticVariance.kind === "nonFinite"
         ) {
             parts.push(this.localizer.get("varianceNonFinite"));
+        }
+        if (this.parsedData?.topNState?.others === "omittedPartial") {
+            parts.push(this.localizer.get("othersPartialMessage"));
+        } else if (this.parsedData?.topNState?.others === "omittedNonAdditive") {
+            parts.push(this.localizer.get("othersNonAdditiveMessage"));
         }
         return parts.join(". ");
     }

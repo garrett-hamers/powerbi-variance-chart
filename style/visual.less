@@ -134,6 +134,21 @@
         stroke-width: 2px;
     }
 
+    .varianceChart[dir="rtl"] {
+        direction: rtl;
+
+        .chart-title,
+        .legend text,
+        .reference-line-label,
+        .trust-warning text {
+            unicode-bidi: plaintext;
+        }
+    }
+
+    .comment-box-svg-fallback {
+        pointer-events: none;
+    }
+
     [data-source-indices]:nth-of-type(even) {
         stroke-dasharray: 4 2;
     }
