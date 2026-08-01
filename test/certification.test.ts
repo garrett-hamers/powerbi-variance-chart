@@ -11,7 +11,7 @@
  * exits 0 and reports zero critical/high/moderate advisories.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -63,6 +63,29 @@ describe("certification gate", () => {
         expect(packageStep).toBeGreaterThan(auditStep);
         expect(packageStep).toBeGreaterThan(e2eStep);
     });
+
+    it("audits the real produced archive bundle, not only source files", () => {
+        const manifest = JSON.parse(
+            readFileSync(join(process.cwd(), "package.json"), "utf8")
+        ) as { scripts?: Record<string, string> };
+        expect(manifest.scripts?.package).toContain("archive-security-audit.mjs");
+        const result = spawnSync(NPM, ["run", "package"], {
+            cwd: process.cwd(),
+            encoding: "utf8",
+            shell: process.platform === "win32",
+            timeout: 180_000,
+            maxBuffer: 32 * 1024 * 1024
+        });
+        try {
+            expect(result.error).toBeUndefined();
+            expect(result.status).toBe(0);
+            expect(`${result.stdout}\n${result.stderr}`).toContain("Archive security audit passed");
+        } finally {
+            rmSync(join(process.cwd(), "dist"), { recursive: true, force: true });
+            rmSync(join(process.cwd(), ".tmp"), { recursive: true, force: true });
+            rmSync(join(process.cwd(), "webpack.statistics.prod.html"), { force: true });
+        }
+    }, 180_000);
 
     it("keeps the four-part version identical across every packaged manifest", () => {
         const read = (file: string) =>
@@ -131,6 +154,7 @@ describe("certification gate", () => {
             readFileSync(join(process.cwd(), "capabilities.json"), "utf8")
         ) as {
             supportsHighlight: boolean;
+            supportsSynchronizingFilterState: boolean;
             supportsOnObjectFormatting: boolean;
             enablePointerEventsFormatMode: boolean;
             sorting?: { default?: Record<string, never> };
@@ -141,6 +165,7 @@ describe("certification gate", () => {
         ) as { stringResources?: string[] };
 
         expect(capabilities.supportsHighlight).toBe(true);
+        expect(capabilities.supportsSynchronizingFilterState).toBe(true);
         expect(capabilities.supportsOnObjectFormatting).toBe(true);
         expect(capabilities.enablePointerEventsFormatMode).toBe(true);
         expect(capabilities.sorting?.default).toEqual({});

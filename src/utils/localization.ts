@@ -36,6 +36,10 @@ export interface VisualLabels {
     varianceNonFinite: string;
     scenarioGroupedTitle: string;
     scenarioGroupedMessage: string;
+    othersPartialTitle: string;
+    othersPartialMessage: string;
+    othersNonAdditiveTitle: string;
+    othersNonAdditiveMessage: string;
 }
 
 const DEFAULT_LABELS: VisualLabels = {
@@ -71,7 +75,11 @@ const DEFAULT_LABELS: VisualLabels = {
     varianceMissing: "Variance unavailable: value is missing",
     varianceNonFinite: "Variance unavailable: value is not finite",
     scenarioGroupedTitle: "Comparison shown grouped",
-    scenarioGroupedMessage: "Actual and comparison values are scenarios, not additive components, so this chart shows them side by side."
+    scenarioGroupedMessage: "Actual and comparison values are scenarios, not additive components, so this chart shows them side by side.",
+    othersPartialTitle: "Others omitted",
+    othersPartialMessage: "Others is omitted because Power BI returned partial data. Rankings and displayed totals are provisional; exactness requires a complete result.",
+    othersNonAdditiveTitle: "Others omitted",
+    othersNonAdditiveMessage: "Others is omitted because this measure is non-additive. The chart does not claim an aggregate for the remaining categories."
 };
 
 const LABEL_KEYS: Record<keyof VisualLabels, string> = {
@@ -107,7 +115,11 @@ const LABEL_KEYS: Record<keyof VisualLabels, string> = {
     varianceMissing: "Status_VarianceMissing",
     varianceNonFinite: "Status_VarianceNonFinite",
     scenarioGroupedTitle: "Warning_ScenarioGroupedTitle",
-    scenarioGroupedMessage: "Warning_ScenarioGroupedMessage"
+    scenarioGroupedMessage: "Warning_ScenarioGroupedMessage",
+    othersPartialTitle: "Warning_OthersPartialTitle",
+    othersPartialMessage: "Warning_OthersPartialMessage",
+    othersNonAdditiveTitle: "Warning_OthersNonAdditiveTitle",
+    othersNonAdditiveMessage: "Warning_OthersNonAdditiveMessage"
 };
 
 export class VisualLocalizer {

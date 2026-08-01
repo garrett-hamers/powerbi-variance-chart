@@ -76,6 +76,8 @@ export interface DataPoint {
     index: number | null;
     /** Original rows represented by this point (one for normal points, many for Others). */
     sourceIndices: number[];
+    /** True only for a synthetic aggregate such as Top N's Others row. */
+    isSynthetic?: boolean;
 }
 
 export interface MeasureFormats {
@@ -566,6 +568,10 @@ export interface TopNOptions {
     othersLabel: string;
     comparisonType: ComparisonType;
     aggregation?: VarianceAggregation;
+    /** Display direction used by labels/tooltips; ranking must use the same sign. */
+    direction?: VarianceDirection;
+    /** Backwards-compatible shorthand for direction. */
+    invertVariance?: boolean;
 }
 
 function sortableValue(value: FiniteValue, direction: string): number {
@@ -591,6 +597,8 @@ export function applyTopN(data: ParsedData, options: TopNOptions): ParsedData {
     const count = Math.max(0, Math.floor(options.count));
     const completeness = data.completeness?.state ?? "complete";
     const aggregation = options.aggregation ?? "additive";
+    const varianceDirection: VarianceDirection = options.direction
+        ?? (options.invertVariance ? "lowerIsBetter" : "higherIsBetter");
     let othersState: TopNState["others"] = options.showOthers ? "notNeeded" : "notRequested";
 
     const rankPoints = (points: DataPoint[], group: string, groupKey: string): DataPoint[] => {
@@ -601,13 +609,28 @@ export function applyTopN(data: ParsedData, options: TopNOptions): ParsedData {
             return options.sortDirection === "asc" ? comparison : -comparison;
         }
         const aValue = options.sortBy === "variance"
-            ? getVariance(a, options.comparisonType)
+            ? getSemanticVariance(a, options.comparisonType, {
+                aggregation,
+                direction: varianceDirection
+            }).variance
             : a.actual;
         const bValue = options.sortBy === "variance"
-            ? getVariance(b, options.comparisonType)
+            ? getSemanticVariance(b, options.comparisonType, {
+                aggregation,
+                direction: varianceDirection
+            }).variance
             : b.actual;
-        const difference = sortableValue(aValue, options.sortDirection) - sortableValue(bValue, options.sortDirection);
-        return options.sortDirection === "asc" ? difference : -difference;
+        const aSortable = sortableValue(aValue, options.sortDirection);
+        const bSortable = sortableValue(bValue, options.sortDirection);
+        if (aSortable !== bSortable) {
+            return options.sortDirection === "asc"
+                ? aSortable - bSortable
+                : bSortable - aSortable;
+        }
+        // Make ties deterministic across runtimes and malformed host rows.
+        const nameTie = a.category.localeCompare(b.category);
+        if (nameTie !== 0) return nameTie;
+        return (a.index ?? Number.MAX_SAFE_INTEGER) - (b.index ?? Number.MAX_SAFE_INTEGER);
         });
         const topN = sorted.slice(0, count);
         const rest = sorted.slice(count);
@@ -664,7 +687,8 @@ export function applyTopN(data: ParsedData, options: TopNOptions): ParsedData {
             tooltipFields: [],
             highlighted: data.hasHighlights === true && rest.some(point => point.highlighted === true),
             index: null,
-            sourceIndices: rest.flatMap(point => point.sourceIndices)
+            sourceIndices: rest.flatMap(point => point.sourceIndices),
+            isSynthetic: true
         });
         othersState = "complete";
         return topN;

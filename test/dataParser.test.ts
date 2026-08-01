@@ -572,6 +572,57 @@ describe("applyTopN", () => {
         expect(result.dataPoints[2].category).toBe("Cat3");
     });
 
+    it("ranks variance using the displayed lower-is-better direction", () => {
+        const data = parseDataView(buildMockDataView({
+            categories: ["Small cost", "Large cost", "On plan"],
+            actual: [80, 50, 100],
+            budget: [100, 100, 100]
+        }))!;
+        const result = applyTopN(data, {
+            ...baseOpts,
+            count: 1,
+            sortBy: "variance",
+            showOthers: false,
+            direction: "lowerIsBetter"
+        });
+        expect(result.dataPoints.map(point => point.category)).toEqual(["Large cost"]);
+    });
+
+    it("keeps malformed variance rows deterministic and ties stable", () => {
+        const data = parseDataView(buildMockDataView({
+            categories: ["Tie B", "Tie A", "Missing", "Nonfinite"],
+            actual: [110, 110, null, Number.POSITIVE_INFINITY],
+            budget: [100, 100, 100, 100]
+        }))!;
+        const result = applyTopN(data, {
+            ...baseOpts,
+            count: 3,
+            sortBy: "variance",
+            showOthers: false
+        });
+        expect(result.dataPoints.map(point => point.category)).toEqual(["Tie A", "Tie B", "Missing"]);
+        expect(result.dataPoints.every(point => point.actual === null || Number.isFinite(point.actual))).toBe(true);
+    });
+
+    it("ranks each group with the same semantic variance contract", () => {
+        const data = parseDataView(buildMockDataView({
+            categories: ["A", "B", "A", "B"],
+            groups: ["East", "East", "West", "West"],
+            actual: [80, 50, 120, 90],
+            budget: [100, 100, 100, 100]
+        }))!;
+        const result = applyTopN(data, {
+            ...baseOpts,
+            count: 1,
+            sortBy: "variance",
+            showOthers: false,
+            direction: "lowerIsBetter"
+        });
+        expect(result.dataPoints.map(point => `${point.group}:${point.category}`)).toEqual([
+            "East:B", "West:B"
+        ]);
+    });
+
     it("Others has recalculated variances", () => {
         const data = makeData(5);
         const result = applyTopN(data, baseOpts);
@@ -593,6 +644,7 @@ describe("applyTopN", () => {
         expect(result.dataPoints[1].index).toBe(2);
         expect(result.dataPoints[2].index).toBeNull();
         expect(result.dataPoints[2].sourceIndices).toEqual([3, 1]);
+        expect(result.dataPoints[2].isSynthetic).toBe(true);
         expect(result.totals.actual).toBe(110);
         expect(result.minValue).toBeLessThanOrEqual(-20);
         expect(result.maxValue).toBeGreaterThanOrEqual(100);

@@ -4,6 +4,7 @@
     "supportsLandingPage": true,
     "supportsEmptyDataView": true,
     "supportsMultiVisualSelection": true,
+    "supportsSynchronizingFilterState": true,
     "supportsOnObjectFormatting": true,
     "enablePointerEventsFormatMode": true,
     "drilldown": {

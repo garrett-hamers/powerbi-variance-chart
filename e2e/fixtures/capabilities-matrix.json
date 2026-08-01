@@ -73,6 +73,7 @@
     "keyboardFocus": true,
     "landingPage": true,
     "multiVisualSelection": true,
+    "synchronizingFilterState": true,
     "drilldown": {
       "roles": [
         "category"
