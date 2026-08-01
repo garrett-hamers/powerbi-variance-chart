@@ -4,7 +4,7 @@ A free, open-source Power BI custom visual for IBCS-aligned variance analysis. B
 
 ![Power BI](https://img.shields.io/badge/Power_BI-API_5.11.1-yellow)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Tests](https://img.shields.io/badge/Tests-386_passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-389_passing-brightgreen)
 ![Version](https://img.shields.io/badge/Version-1.8.6.0-blue)
 
 ---
@@ -157,7 +157,7 @@ a specific package is submitted or resubmitted. Development continues on `master
 
 ## Testing
 
-386 automated unit tests, plus a browser-based end-to-end suite.
+389 automated unit tests, plus a browser-based end-to-end suite.
 
 | Suite | Coverage |
 |-------|----------|
