@@ -31,6 +31,9 @@ export interface VisualLabels {
     dataReducedMessage: string;
     zeroBaseTitle: string;
     zeroBaseMessage: string;
+    percentageZeroReference: string;
+    varianceMissing: string;
+    varianceNonFinite: string;
     scenarioGroupedTitle: string;
     scenarioGroupedMessage: string;
 }
@@ -64,6 +67,9 @@ const DEFAULT_LABELS: VisualLabels = {
     dataReducedMessage: "Power BI reduced the data returned to the visual. Use Top N or filters to focus the analysis.",
     zeroBaseTitle: "Percentage variance unavailable",
     zeroBaseMessage: "One or more comparison values are zero, so percentage variance is shown as N/A.",
+    percentageZeroReference: "N/A: reference is zero",
+    varianceMissing: "Variance unavailable: value is missing",
+    varianceNonFinite: "Variance unavailable: value is not finite",
     scenarioGroupedTitle: "Comparison shown grouped",
     scenarioGroupedMessage: "Actual and comparison values are scenarios, not additive components, so this chart shows them side by side."
 };
@@ -97,6 +103,9 @@ const LABEL_KEYS: Record<keyof VisualLabels, string> = {
     dataReducedMessage: "Warning_DataReducedMessage",
     zeroBaseTitle: "Warning_ZeroBaseTitle",
     zeroBaseMessage: "Warning_ZeroBaseMessage",
+    percentageZeroReference: "Status_PercentageZeroReference",
+    varianceMissing: "Status_VarianceMissing",
+    varianceNonFinite: "Status_VarianceNonFinite",
     scenarioGroupedTitle: "Warning_ScenarioGroupedTitle",
     scenarioGroupedMessage: "Warning_ScenarioGroupedMessage"
 };

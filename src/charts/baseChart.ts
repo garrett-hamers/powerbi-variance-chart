@@ -9,8 +9,7 @@ import {
     FiniteValue,
     MeasureKey,
     getAvailableComparisonType,
-    getVariance,
-    getVariancePct,
+    getSemanticVariance,
     getComparisonValue
 } from "../dataParser";
 import { IBCSColors, getVarianceColor } from "../utils/colors";
@@ -233,23 +232,19 @@ export abstract class BaseChart {
     protected getVarianceForPoint(d: DataPoint): FiniteValue {
         const comparisonType = this.getComparisonType();
         if (comparisonType === null) return null;
-        let variance = getVariance(d, comparisonType);
-        if (variance === null) return null;
-        if (this.settings.invertVariance) {
-            variance = -variance;
-        }
-        return variance;
+        return getSemanticVariance(d, comparisonType, {
+            aggregation: "additive",
+            direction: this.settings.invertVariance ? "lowerIsBetter" : "higherIsBetter"
+        }).variance;
     }
 
     protected getVariancePctForPoint(d: DataPoint): FiniteValue {
         const comparisonType = this.getComparisonType();
         if (comparisonType === null) return null;
-        let pct = getVariancePct(d, comparisonType);
-        if (pct === null) return null;
-        if (this.settings.invertVariance) {
-            pct = -pct;
-        }
-        return pct;
+        return getSemanticVariance(d, comparisonType, {
+            aggregation: "additive",
+            direction: this.settings.invertVariance ? "lowerIsBetter" : "higherIsBetter"
+        }).percentage;
     }
 
     protected getComparisonForPoint(d: DataPoint): FiniteValue {
